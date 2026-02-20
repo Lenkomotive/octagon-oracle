@@ -1,0 +1,1 @@
+# Octagon Oracle\n\nTracking and ranking UFC prediction accuracy from YouTubers.\n\n## YouTubers tracked\n- MMA Guru\n- Mighty Mouse\n- More TBD\n\n## Goals\n- Extract fight predictions from YouTube video transcripts\n- Compare predictions against actual UFC results\n- Rank YouTubers by prediction accuracy\n- Display rankings on a website
