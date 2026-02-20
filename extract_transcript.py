@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import json
 import sys
@@ -5,6 +6,15 @@ import os
 
 
 COOKIES_FILE = os.path.join(os.path.dirname(__file__), "cookies.txt")
+
+
+def _find_node() -> str | None:
+    """Find a Node.js >= 20 binary, preferring ~/.local/node/bin/node."""
+    local_node = os.path.expanduser("~/.local/node/bin/node")
+    if os.path.isfile(local_node):
+        return local_node
+    system_node = shutil.which("node")
+    return system_node
 
 
 def extract_transcript(video_url: str) -> dict:
@@ -19,6 +29,10 @@ def extract_transcript(video_url: str) -> dict:
         "--print-json",
         "-o", "/tmp/oo_%(id)s",
     ]
+
+    node_path = _find_node()
+    if node_path:
+        args += ["--js-runtimes", f"node:{node_path}"]
 
     if os.path.isfile(COOKIES_FILE):
         args += ["--cookies", COOKIES_FILE]
