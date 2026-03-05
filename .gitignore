@@ -1,0 +1,5 @@
+cookies.txt
+transcripts/
+__pycache__/
+*.pyc
+.env
