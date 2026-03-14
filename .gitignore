@@ -1,5 +1,10 @@
 cookies.txt
 transcripts/
+predictions/
+results/
+scores/
+processed.json
 __pycache__/
 *.pyc
 .env
+venv/
