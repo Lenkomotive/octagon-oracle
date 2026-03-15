@@ -1,0 +1,55 @@
+{
+  "channels": [
+    {
+      "name": "THE MMA GURU",
+      "url": "https://www.youtube.com/@the-mma-guru/videos",
+      "keywords": ["predictions", "picks", "breakdown", "betting tips"]
+    },
+    {
+      "name": "Bedtime MMA",
+      "url": "https://www.youtube.com/@BedtimeMMA/videos",
+      "keywords": ["predictions", "bicks"]
+    },
+    {
+      "name": "KampfgeistMMA",
+      "url": "https://www.youtube.com/@KampfgeistMMA/videos",
+      "keywords": ["predictions", "fight week", "steht an"]
+    },
+    {
+      "name": "We Want Picks",
+      "url": "https://www.youtube.com/@WeWantPicks/videos",
+      "keywords": ["predictions", "picks", "bets"]
+    },
+    {
+      "name": "MMA EXPERTS",
+      "url": "https://www.youtube.com/@MMAEXPERTS/videos",
+      "keywords": ["predictions", "breakdown", "betting"]
+    },
+    {
+      "name": "Artem MMA",
+      "url": "https://www.youtube.com/@artem_mma/videos",
+      "keywords": ["predictions", "preview"]
+    },
+    {
+      "name": "Mighty Mouse",
+      "url": "https://www.youtube.com/@Mighty15x/videos",
+      "keywords": ["predictions", "who wins"]
+    },
+    {
+      "name": "Lucrative James",
+      "url": "https://www.youtube.com/@LucrativeJames/videos",
+      "keywords": ["predictions", "betting", "breakdown"]
+    },
+    {
+      "name": "Walk The Line MMA",
+      "url": "https://www.youtube.com/@mmafortuneteller/videos",
+      "keywords": ["predictions", "full card"]
+    },
+    {
+      "name": "HopperoMMA",
+      "url": "https://www.youtube.com/@hoppero-mma/videos",
+      "keywords": ["predictions", "breaking down"]
+    }
+  ],
+  "check_last_n_videos": 10
+}

@@ -1,15 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
-  --card: #141414;
-  --card-border: #1f1f1f;
-  --accent: #d4af37;
-  --accent-dim: #b8962e;
-  --green: #22c55e;
-  --red: #ef4444;
-  --muted: #737373;
+  --background: #fafafa;
+  --foreground: #111111;
+  --card: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.06);
+  --accent: #dc2626;
+  --accent-dim: #b91c1c;
+  --green: #16a34a;
+  --red: #dc2626;
+  --muted: #888888;
 }
 
 @theme inline {
@@ -29,5 +29,6 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }

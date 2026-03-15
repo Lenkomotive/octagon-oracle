@@ -33,19 +33,19 @@ export function StatsCards({
 
   const cards = [
     {
-      label: "Analysts Tracked",
+      label: "Analysts",
       value: analysts.length,
       sub: `Updated ${lastUpdated}`,
     },
     {
-      label: "Total Predictions",
+      label: "Predictions",
       value: totalPredictions,
       sub: `${totalCorrect} correct`,
     },
     {
       label: "Avg Accuracy",
       value: `${avgAccuracy}%`,
-      sub: "Across all analysts",
+      sub: "All analysts",
     },
     {
       label: "Best Streak",
@@ -55,14 +55,14 @@ export function StatsCards({
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       {cards.map((card) => (
         <div
           key={card.label}
-          className="rounded-xl border border-card-border bg-card p-4"
+          className="rounded-2xl bg-card p-5 shadow-sm"
         >
-          <p className="text-xs text-muted">{card.label}</p>
-          <p className="mt-1 text-2xl font-bold text-foreground">
+          <p className="text-xs font-medium text-muted uppercase tracking-wider">{card.label}</p>
+          <p className="mt-2 text-3xl font-bold text-foreground tracking-tight">
             {card.value}
           </p>
           <p className="mt-1 text-xs text-muted">{card.sub}</p>
