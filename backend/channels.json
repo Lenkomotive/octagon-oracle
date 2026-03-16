@@ -49,6 +49,31 @@
       "name": "HopperoMMA",
       "url": "https://www.youtube.com/@hoppero-mma/videos",
       "keywords": ["predictions", "breaking down"]
+    },
+    {
+      "name": "MMA Joey C",
+      "url": "https://www.youtube.com/@MMAJoeyC/videos",
+      "keywords": ["predictions", "picks", "breakdown"]
+    },
+    {
+      "name": "Locked Door MMA",
+      "url": "https://www.youtube.com/@LockedDoorMMA/videos",
+      "keywords": ["prediction", "breakdown", "best bets"]
+    },
+    {
+      "name": "The Weasle",
+      "url": "https://www.youtube.com/@theweaslemma/videos",
+      "keywords": ["predictions", "breakdown", "bets"]
+    },
+    {
+      "name": "Bet Slam With Sam",
+      "url": "https://www.youtube.com/@BetSlamWithSam/videos",
+      "keywords": ["predictions", "full card"]
+    },
+    {
+      "name": "Lorenzo Predicts",
+      "url": "https://www.youtube.com/@LorenzoPredicts/videos",
+      "keywords": ["predictions", "predicts", "picks"]
     }
   ],
   "check_last_n_videos": 10
