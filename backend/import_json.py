@@ -24,10 +24,15 @@ def import_results(session):
 
     count = 0
     for entry in index:
-        slug = entry.get('slug', '')
-        file_path = os.path.join(os.path.dirname(__file__), 'results', f'{slug}.json')
+        # Get file path from index entry
+        rel_path = entry.get('file', '')
+        file_path = os.path.join(os.path.dirname(__file__), rel_path)
         if not os.path.isfile(file_path):
+            log.warning(f"File not found: {file_path}")
             continue
+
+        # Derive slug from filename
+        slug = os.path.basename(rel_path).replace('.json', '')
 
         with open(file_path) as f:
             data = json.load(f)
@@ -36,10 +41,21 @@ def import_results(session):
         if existing:
             continue
 
+        # Parse date - handle "March 14, 2026" format
+        event_date = None
+        if entry.get('date'):
+            try:
+                event_date = datetime.strptime(entry['date'], '%B %d, %Y').date()
+            except ValueError:
+                try:
+                    event_date = datetime.strptime(entry['date'], '%Y-%m-%d').date()
+                except ValueError:
+                    pass
+
         event = Event(
             name=data.get('event', entry.get('name', slug)),
             slug=slug,
-            date=datetime.strptime(entry['date'], '%Y-%m-%d').date() if entry.get('date') else None,
+            date=event_date,
             ufcstats_url=entry.get('url'),
         )
         session.add(event)
