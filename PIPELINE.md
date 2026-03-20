@@ -102,17 +102,28 @@
 ```
 
 
-### Pipeline B: SCORE PREDICTIONS (after event)
+### Pipeline B: SCORE PREDICTIONS (piggybacks on step 0)
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│          TRIGGERED: after event completes               │
-│          (check on refresh_upcoming cycle)              │
-└────────────────────────┬────────────────────────────────┘
-                         │
-                         ▼
             ┌────────────────────────┐
-            │  1. FETCH RESULTS      │
+            │  0. REFRESH UPCOMING   │
+            │         ...            │
+            │  Also checks last 3    │
+            │  past events           │
+            └───────────┬────────────┘
+                        │
+                        ▼
+            ┌────────────────────────┐
+            │  Past event has        │
+            │  results in DB?        │
+            │                        │
+            │  Yes → skip            │
+            │  No  ↓                 │
+            └───────────┬────────────┘
+                        │
+                        ▼
+            ┌────────────────────────┐
+            │  FETCH RESULTS         │
             │                        │
             │  Scrape Wikipedia      │
             │  event page for        │
@@ -125,7 +136,7 @@
                         │
                         ▼
             ┌────────────────────────┐
-            │  2. SCORE PREDICTIONS  │
+            │  SCORE PREDICTIONS     │
             │                        │
             │  Find all unscored     │
             │  predictions for this  │
