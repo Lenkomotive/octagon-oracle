@@ -28,6 +28,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
     volumes:
       - ./backend:/app
+      - /opt/shared/cookies.txt:/app/cookies.txt:ro
 
   website:
     container_name: octagon-website
