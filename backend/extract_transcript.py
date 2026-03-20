@@ -165,7 +165,7 @@ def extract_transcript(video_url: str, method: str = "auto") -> dict:
     Extract transcript from a YouTube video.
 
     Methods:
-      "auto"     - try captions first, Whisper fallback
+      "auto"     - Whisper first, YouTube captions fallback
       "captions" - YouTube auto-captions only
       "whisper"  - Groq Whisper only
       "both"     - fetch both for cross-reference
@@ -180,15 +180,8 @@ def extract_transcript(video_url: str, method: str = "auto") -> dict:
     whisper_text = None
     whisper_segments = []
 
-    # --- YouTube captions ---
-    if method in ("auto", "captions", "both"):
-        try:
-            captions_text = _fetch_youtube_captions(video_url, video_id)
-        except Exception as e:
-            log.error("Captions failed for %s: %s", video_id, e)
-
-    # --- Whisper ---
-    need_whisper = method in ("whisper", "both") or (method == "auto" and not captions_text)
+    # --- Whisper (primary) ---
+    need_whisper = method in ("auto", "whisper", "both")
     if need_whisper:
         try:
             audio_path = _download_audio(video_url, video_id)
@@ -204,6 +197,13 @@ def extract_transcript(video_url: str, method: str = "auto") -> dict:
             whisper_text = " ".join(s["text"] for s in whisper_segments)
         except Exception as e:
             log.error("Whisper failed for %s: %s", video_id, e)
+
+    # --- YouTube captions (fallback) ---
+    if method in ("captions", "both") or (method == "auto" and not whisper_text):
+        try:
+            captions_text = _fetch_youtube_captions(video_url, video_id)
+        except Exception as e:
+            log.error("Captions failed for %s: %s", video_id, e)
 
     # --- Pick best result ---
     if whisper_text:
