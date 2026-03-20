@@ -1,145 +1,98 @@
-"""Score predictions against actual UFC results."""
+"""Score predictions against actual UFC fight results."""
 
-import json
 import logging
-import os
 
-log = logging.getLogger(__name__)
+from models import Event, Fight, Prediction, Score
 
-
-def _normalize(name: str) -> str:
-    return name.lower().strip().replace(".", "")
+log = logging.getLogger("score")
 
 
-def score_predictions(predictions: dict, results: dict) -> dict:
-    """Compare a prediction set against actual results.
+def score_prediction(session, prediction: Prediction, event: Event) -> Score | None:
+    """Score a single prediction against actual fight results.
 
-    Returns a scored dict with each prediction marked correct/incorrect/unmatched,
-    plus summary stats.
+    Returns a Score object or None if fight not found / no results yet.
     """
-    # Build lookup: normalized fighter name -> result dict
-    results_by_fight = {}
-    for r in results.get("results", []):
-        if not r.get("winner"):
-            continue
-        f1 = _normalize(r["fighter1"])
-        f2 = _normalize(r["fighter2"])
-        results_by_fight[f1] = r
-        results_by_fight[f2] = r
+    fights = session.query(Fight).filter_by(event_id=event.id).all()
 
-    scored = []
-    correct = 0
-    incorrect = 0
-    unmatched = 0
+    picked_norm = prediction.fighter_picked.lower().strip()
+    against_norm = prediction.fighter_against.lower().strip()
 
-    for pred in predictions.get("predictions", []):
-        picked = pred["fighter_picked"]
-        against = pred["fighter_against"]
-        picked_norm = _normalize(picked)
-        against_norm = _normalize(against)
+    for fight in fights:
+        f1 = fight.fighter1.lower().strip()
+        f2 = fight.fighter2.lower().strip()
 
-        # Find the matching result
-        result = results_by_fight.get(picked_norm) or results_by_fight.get(against_norm)
-
-        if not result:
-            log.warning("No result found for: %s vs %s", picked, against)
-            scored.append({**pred, "result": "unmatched", "actual_winner": None})
-            unmatched += 1
+        if picked_norm not in (f1, f2) and against_norm not in (f1, f2):
             continue
 
-        actual_winner = result["winner"]
-        is_correct = _normalize(actual_winner) == picked_norm
+        if not fight.winner:
+            return None  # fight hasn't happened yet
 
-        if is_correct:
-            correct += 1
-            log.info("  CORRECT: %s over %s (actual: %s by %s)",
-                     picked, against, actual_winner, result.get("method", "?"))
-        else:
-            incorrect += 1
-            log.info("  WRONG:   %s over %s (actual winner: %s by %s)",
-                     picked, against, actual_winner, result.get("method", "?"))
+        correct = fight.winner.lower().strip() == picked_norm
 
-        # Check method accuracy too
         method_correct = None
-        if pred.get("method") and result.get("method"):
-            pred_method = pred["method"].lower()
-            actual_method = result["method"].lower()
-            if pred_method == "ko":
-                method_correct = "ko" in actual_method or "tko" in actual_method
-            elif pred_method == "submission":
-                method_correct = "submission" in actual_method
-            elif pred_method == "decision":
-                method_correct = "decision" in actual_method
+        if prediction.method and fight.method:
+            pm = prediction.method.lower()
+            am = fight.method.lower()
+            if pm == "ko":
+                method_correct = "ko" in am or "tko" in am
+            elif pm == "submission":
+                method_correct = "sub" in am
+            elif pm == "decision":
+                method_correct = "dec" in am
 
-        scored.append({
-            **pred,
-            "result": "correct" if is_correct else "incorrect",
-            "actual_winner": actual_winner,
-            "actual_method": result.get("method"),
-            "method_correct": method_correct,
-        })
+        score = Score(
+            prediction_id=prediction.id,
+            fight_id=fight.id,
+            correct=correct,
+            method_correct=method_correct,
+        )
 
-    total = correct + incorrect
-    accuracy = (correct / total * 100) if total > 0 else 0
+        icon = "CORRECT" if correct else "WRONG"
+        log.info("  %s: %s over %s (actual: %s by %s)",
+                 icon, prediction.fighter_picked, prediction.fighter_against,
+                 fight.winner, fight.method)
+        return score
 
-    summary = {
-        "uploader": predictions.get("uploader"),
-        "event": predictions.get("event") or results.get("event"),
-        "video_id": predictions.get("video_id"),
-        "correct": correct,
-        "incorrect": incorrect,
-        "unmatched": unmatched,
-        "total_scored": total,
-        "accuracy_pct": round(accuracy, 1),
-        "scored_predictions": scored,
-    }
-
-    log.info("Score: %s — %d/%d correct (%.1f%%)",
-             predictions.get("uploader", "?"), correct, total, accuracy)
-
-    return summary
+    log.warning("  No matching fight for: %s vs %s",
+                prediction.fighter_picked, prediction.fighter_against)
+    return None
 
 
-def score_from_files(prediction_path: str, results_path: str) -> dict:
-    """Load prediction and result files, score them."""
-    with open(prediction_path) as f:
-        predictions = json.load(f)
-    with open(results_path) as f:
-        results = json.load(f)
+def score_unscored(session):
+    """Find and score all predictions that don't have scores yet.
 
-    return score_predictions(predictions, results)
+    Only scores predictions where the event has results (winners).
+    Called by the monitor on each cycle (step 0a).
+    """
+    unscored = session.query(Prediction).filter(
+        Prediction.event_id.isnot(None),
+        ~Prediction.score.has(),
+    ).all()
 
+    if not unscored:
+        return 0
 
-if __name__ == "__main__":
-    import sys
+    scored_count = 0
+    for pred in unscored:
+        event = session.query(Event).get(pred.event_id)
+        if not event:
+            continue
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+        has_results = session.query(Fight).filter(
+            Fight.event_id == event.id,
+            Fight.winner.isnot(None),
+        ).count() > 0
 
-    if len(sys.argv) < 3:
-        print("Usage: python score.py <predictions.json> <results.json>")
-        sys.exit(1)
+        if not has_results:
+            continue
 
-    result = score_from_files(sys.argv[1], sys.argv[2])
+        score = score_prediction(session, pred, event)
+        if score:
+            session.add(score)
+            scored_count += 1
 
-    print(f"\n{result['uploader']} — {result['event']}")
-    print(f"Score: {result['correct']}/{result['total_scored']} ({result['accuracy_pct']}%)")
-    print()
-    for p in result["scored_predictions"]:
-        icon = "+" if p["result"] == "correct" else "-" if p["result"] == "incorrect" else "?"
-        method_note = ""
-        if p.get("method_correct") is True:
-            method_note = " (method correct too)"
-        elif p.get("method_correct") is False:
-            method_note = f" (predicted {p.get('method')}, actual {p.get('actual_method')})"
-        print(f"  [{icon}] {p['fighter_picked']} over {p['fighter_against']}{method_note}")
+    if scored_count:
+        session.commit()
+        log.info("Scored %d previously unscored predictions", scored_count)
 
-    # Save
-    os.makedirs("scores", exist_ok=True)
-    out_path = f"scores/{result.get('video_id', 'unknown')}.json"
-    with open(out_path, "w") as f:
-        json.dump(result, f, indent=2)
-    print(f"\nSaved to {out_path}")
+    return scored_count
