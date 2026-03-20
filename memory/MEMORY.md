@@ -1,0 +1,1 @@
+- [user_preferences.md](user_preferences.md) — Prefers OpenRouter, cheap models for LLM calls
