@@ -21,7 +21,6 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 MODELS = [
     "google/gemini-2.5-flash",
     "deepseek/deepseek-v3.2-20251201",
-    "stepfun/step-3.5-flash",
     "openai/gpt-oss-120b",
 ]
 
