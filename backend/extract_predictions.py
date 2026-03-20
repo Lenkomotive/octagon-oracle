@@ -1,9 +1,13 @@
-"""Extract fight predictions from a transcript using LLM."""
+"""Extract fight predictions from a transcript using multiple LLMs.
+
+Runs 4 models in parallel, uses consensus for final picks.
+"""
 
 import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from dotenv import load_dotenv
@@ -13,7 +17,13 @@ load_dotenv()
 log = logging.getLogger("extract_predictions")
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL = "deepseek/deepseek-chat-v3-0324"
+
+MODELS = [
+    "google/gemini-2.5-flash",
+    "deepseek/deepseek-v3.2-20251201",
+    "stepfun/step-3.5-flash",
+    "openai/gpt-oss-120b",
+]
 
 SYSTEM_PROMPT = """You are a UFC prediction extractor. Given a transcript from a YouTube video where someone discusses upcoming UFC fights and makes predictions, extract all fight predictions.
 
@@ -29,33 +39,6 @@ Return ONLY valid JSON: {"predictions": [{"fighter_picked": "...", "fighter_agai
 If no predictions found, return {"predictions": []}."""
 
 
-def _call_llm(messages: list[dict], max_tokens: int = 2000) -> str:
-    t0 = time.time()
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": MODEL,
-            "messages": messages,
-            "temperature": 0.0,
-            "max_tokens": max_tokens,
-        },
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"OpenRouter error: {response.status_code} {response.text[:300]}")
-
-    data = response.json()
-    content = data["choices"][0]["message"]["content"].strip()
-    usage = data.get("usage", {})
-    log.info("LLM: %d chars, %d/%d tokens (%.1fs)",
-             len(content), usage.get("prompt_tokens", 0),
-             usage.get("completion_tokens", 0), time.time() - t0)
-    return content
-
-
 def _parse_json(content: str) -> dict:
     if content.startswith("```"):
         content = content.split("\n", 1)[1]
@@ -63,24 +46,161 @@ def _parse_json(content: str) -> dict:
     return json.loads(content)
 
 
+def _extract_with_model(model: str, user_content: str) -> tuple[str, list[dict]]:
+    """Run extraction with a single model. Returns (model_name, predictions)."""
+    try:
+        t0 = time.time()
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.0,
+            },
+            timeout=120,
+        )
+
+        if response.status_code != 200:
+            log.warning("[%s] HTTP %d: %s", model, response.status_code, response.text[:200])
+            return model, []
+
+        content = response.json()["choices"][0]["message"]["content"].strip()
+        result = _parse_json(content)
+        preds = result.get("predictions", [])
+        log.info("[%s] %d predictions (%.1fs)", model, len(preds), time.time() - t0)
+        return model, preds
+
+    except Exception as e:
+        log.warning("[%s] Failed: %s", model, e)
+        return model, []
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize fighter name for comparison."""
+    return name.lower().strip().replace(".", "").replace("-", " ")
+
+
+def _build_consensus(all_results: dict[str, list[dict]], fight_card: list[dict] = None) -> list[dict]:
+    """Build consensus predictions from multiple model outputs.
+
+    A pick is included if at least 2 models agree on the winner for a fight.
+    Uses fight card names when available for normalization.
+    """
+    # Build card name lookup
+    card_lookup = {}
+    if fight_card:
+        for f in fight_card:
+            card_lookup[_normalize_name(f["fighter1"])] = f["fighter1"]
+            card_lookup[_normalize_name(f["fighter2"])] = f["fighter2"]
+
+    # Collect all picks per fight (keyed by sorted fighter pair)
+    fight_picks = {}  # (fighter_a, fighter_b) -> {model: picked_fighter}
+
+    for model, preds in all_results.items():
+        for p in preds:
+            picked = p["fighter_picked"]
+            against = p["fighter_against"]
+
+            # Normalize to card names if possible
+            picked_norm = _normalize_name(picked)
+            against_norm = _normalize_name(against)
+
+            if card_lookup:
+                picked = card_lookup.get(picked_norm, picked)
+                against = card_lookup.get(against_norm, against)
+
+            # Create a canonical fight key (sorted)
+            fight_key = tuple(sorted([_normalize_name(picked), _normalize_name(against)]))
+
+            if fight_key not in fight_picks:
+                fight_picks[fight_key] = {"picks": {}, "methods": {}, "confidences": {},
+                                          "names": (picked, against)}
+
+            fight_picks[fight_key]["picks"][model] = picked
+            fight_picks[fight_key]["methods"][model] = p.get("method")
+            fight_picks[fight_key]["confidences"][model] = p.get("confidence", "medium")
+
+    # Build consensus
+    consensus = []
+    for fight_key, data in fight_picks.items():
+        picks = data["picks"]
+        if not picks:
+            continue
+
+        # Count votes per fighter
+        vote_counts = {}
+        for model, picked in picks.items():
+            norm = _normalize_name(picked)
+            vote_counts[norm] = vote_counts.get(norm, 0) + 1
+
+        # Winner is the one with most votes (need at least 2)
+        best = max(vote_counts, key=vote_counts.get)
+        if vote_counts[best] < 2:
+            log.warning("No consensus for %s (votes: %s)", fight_key, vote_counts)
+            continue
+
+        # Get the proper-cased name
+        winner_name = best
+        for model, picked in picks.items():
+            if _normalize_name(picked) == best:
+                winner_name = picked
+                break
+
+        # Determine loser
+        names = data["names"]
+        loser_name = names[1] if _normalize_name(names[0]) == best else names[0]
+
+        # Most common method
+        methods = [m for m in data["methods"].values() if m]
+        method = max(set(methods), key=methods.count) if methods else None
+
+        # Confidence based on agreement
+        agreement = vote_counts[best]
+        total = len(picks)
+        if agreement == total:
+            confidence = "high"
+        elif agreement >= total * 0.75:
+            confidence = "medium"
+        else:
+            confidence = "low"
+
+        consensus.append({
+            "fighter_picked": winner_name,
+            "fighter_against": loser_name,
+            "method": method,
+            "confidence": confidence,
+            "models_agreed": agreement,
+            "models_total": total,
+        })
+
+    return consensus
+
+
 def extract_predictions(transcript_text: str, video_title: str, uploader: str,
-                        fight_card: list[dict] = None, max_retries: int = 1) -> list[dict]:
-    """Extract predictions from transcript text.
+                        fight_card: list[dict] = None) -> list[dict]:
+    """Extract predictions using all models in parallel, return consensus.
 
     Args:
         transcript_text: full transcript
         video_title: video title for context
         uploader: channel name
-        fight_card: list of {"fighter1": ..., "fighter2": ...} dicts from DB
-        max_retries: retries for name validation
+        fight_card: list of {"fighter1": ..., "fighter2": ...} from DB
 
     Returns:
-        list of prediction dicts with fighter_picked, fighter_against, method, confidence
+        list of consensus prediction dicts
     """
-    log.info("=== Extracting predictions ===")
+    log.info("=== Extracting predictions with %d models ===", len(MODELS))
     log.info("Title: \"%s\" by %s (%d chars)", video_title[:60], uploader, len(transcript_text))
     t0 = time.time()
 
+    # Build user content
     user_content = f"Video title: {video_title}\nUploader: {uploader}\n\n"
 
     if fight_card:
@@ -90,41 +210,25 @@ def extract_predictions(transcript_text: str, video_title: str, uploader: str,
 
     user_content += f"Transcript:\n{transcript_text}"
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
-    ]
+    # Run all models in parallel
+    all_results = {}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(_extract_with_model, m, user_content): m for m in MODELS}
+        for future in as_completed(futures):
+            model, preds = future.result()
+            all_results[model] = preds
 
-    content = _call_llm(messages)
-    result = _parse_json(content)
-    predictions = result.get("predictions", [])
-    log.info("Extracted %d prediction(s)", len(predictions))
+    # Build consensus
+    consensus = _build_consensus(all_results, fight_card)
 
-    # Validate names against card
-    if fight_card and predictions:
-        card_names = set()
-        for f in fight_card:
-            card_names.add(f["fighter1"].lower().strip())
-            card_names.add(f["fighter2"].lower().strip())
+    log.info("Consensus: %d picks from %d models (%.1fs total)",
+             len(consensus), len(all_results), time.time() - t0)
 
-        for attempt in range(max_retries):
-            unmatched = []
-            for p in predictions:
-                if p["fighter_picked"].lower().strip() not in card_names:
-                    unmatched.append(p["fighter_picked"])
-                if p["fighter_against"].lower().strip() not in card_names:
-                    unmatched.append(p["fighter_against"])
+    # Log comparison
+    for p in consensus:
+        method = f" by {p['method']}" if p.get("method") else ""
+        log.info("  [%d/%d] %s over %s%s",
+                 p["models_agreed"], p["models_total"],
+                 p["fighter_picked"], p["fighter_against"], method)
 
-            if not unmatched:
-                log.info("All names validated against card")
-                break
-
-            log.warning("Unmatched: %s — correction retry %d/%d", set(unmatched), attempt + 1, max_retries)
-            messages.append({"role": "assistant", "content": content})
-            messages.append({"role": "user", "content": f"These names don't match the card: {', '.join(set(unmatched))}\n\nCard:\n{fights_list}\n\nFix and return corrected JSON."})
-            content = _call_llm(messages)
-            result = _parse_json(content)
-            predictions = result.get("predictions", [])
-
-    log.info("Extraction complete: %d picks (%.1fs)", len(predictions), time.time() - t0)
-    return predictions
+    return consensus

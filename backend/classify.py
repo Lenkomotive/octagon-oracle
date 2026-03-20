@@ -1,8 +1,12 @@
-"""Classify whether a transcript is a UFC prediction video."""
+"""Classify whether a transcript is a UFC prediction video.
+
+Runs 4 models in parallel, majority vote decides.
+"""
 
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 from dotenv import load_dotenv
@@ -12,43 +16,77 @@ load_dotenv()
 log = logging.getLogger("classify")
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL = "deepseek/deepseek-chat-v3-0324"
+
+MODELS = [
+    "google/gemini-2.5-flash",
+    "deepseek/deepseek-v3.2-20251201",
+    "stepfun/step-3.5-flash",
+    "openai/gpt-oss-120b",
+]
+
+SYSTEM_PROMPT = "Answer only 'yes' or 'no'. A prediction video is one where someone picks winners for upcoming UFC fights. Look for phrases like 'I'm going with', 'my pick is', 'prediction', 'I think X beats Y', 'breakdown', etc."
+
+USER_PROMPT = "Is this a UFC prediction video where someone picks winners for upcoming fights?\n\n{sample}"
+
+
+def _classify_with_model(model: str, sample: str) -> tuple[str, bool | None]:
+    """Run classification with a single model. Returns (model_name, result)."""
+    try:
+        t0 = time.time()
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": USER_PROMPT.format(sample=sample)},
+                ],
+                "temperature": 0.0,
+                "max_tokens": 5,
+            },
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            log.warning("[%s] HTTP %d", model, response.status_code)
+            return model, None
+
+        content = response.json()["choices"][0]["message"]["content"].strip().lower()
+        result = "yes" in content
+        log.info("[%s] %s (%.1fs)", model, "YES" if result else "NO", time.time() - t0)
+        return model, result
+
+    except Exception as e:
+        log.warning("[%s] Failed: %s", model, e)
+        return model, None
 
 
 def classify_video(transcript_text: str) -> bool:
-    """LLM checks transcript: is this a prediction video for an upcoming UFC event?
+    """Run classification across all models, majority vote.
 
-    Uses first 1000 chars to save tokens.
-    Returns True if prediction video, False otherwise.
+    Returns True if majority say it's a prediction video.
     """
     sample = transcript_text[:2000]
-
-    log.info("Classifying transcript (%d chars sample)...", len(sample))
+    log.info("Classifying with %d models...", len(MODELS))
     t0 = time.time()
 
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": MODEL,
-            "messages": [
-                {"role": "system", "content": "Answer only 'yes' or 'no'. A prediction video is one where someone picks winners for upcoming UFC fights. Look for phrases like 'I'm going with', 'my pick is', 'prediction', 'I think X beats Y', 'breakdown', etc."},
-                {"role": "user", "content": f"Is this a UFC prediction video where someone picks winners for upcoming fights?\n\n{sample}"},
-            ],
-            "temperature": 0.0,
-            "max_tokens": 5,
-        },
-    )
+    results = {}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(_classify_with_model, m, sample): m for m in MODELS}
+        for future in as_completed(futures):
+            model, result = future.result()
+            if result is not None:
+                results[model] = result
 
-    if response.status_code != 200:
-        log.error("LLM error: %d %s", response.status_code, response.text[:200])
-        return False
+    yes_count = sum(1 for v in results.values() if v)
+    total = len(results)
+    is_prediction = yes_count > total / 2
 
-    content = response.json()["choices"][0]["message"]["content"].strip().lower()
-    is_prediction = "yes" in content
+    log.info("Vote: %d/%d YES → %s (%.1fs)",
+             yes_count, total, "PREDICTION" if is_prediction else "NOT PREDICTION", time.time() - t0)
 
-    log.info("Classification: %s (%.1fs)", "PREDICTION" if is_prediction else "NOT PREDICTION", time.time() - t0)
     return is_prediction
