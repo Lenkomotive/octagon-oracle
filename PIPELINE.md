@@ -9,6 +9,20 @@
                          │
                          ▼
             ┌────────────────────────┐
+            │  0. REFRESH EVENTS     │
+            │                        │
+            │  Scrape Wikipedia:     │
+            │  List_of_UFC_events    │
+            │  - Upcoming events     │
+            │  - Past events         │
+            │  Add new events to DB  │
+            │  Fetch results for     │
+            │  completed events      │
+            │  that have no results  │
+            └───────────┬────────────┘
+                        │
+                        ▼
+            ┌────────────────────────┐
             │  1. GET UPCOMING EVENT │
             │                        │
             │  Query events table    │
@@ -126,9 +140,12 @@
 
 ## Data Flow
 
+    Wikipedia ──→ Events list (upcoming + past)
+                      │
     YouTube ──→ yt-dlp ──→ Transcript ──→ LLM ──→ Predictions
                                                        │
-    ufcstats.com ──→ Results ──→ Fights table ─────────┤
+    Wikipedia event page ──→ Results ──→ Fights ───────┤
+    (or ufcstats.com)                                  │
                                                        ▼
                                                     Scores
                                                        │

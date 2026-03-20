@@ -18,14 +18,14 @@ log = logging.getLogger("monitor")
 
 # ── Channel scanning ────────────────────────────────────────
 
-def _scan_channel(channel: Channel, limit: int = 10) -> list[dict]:
-    """Fetch recent videos from a YouTube channel."""
+def _scan_channel(channel: Channel) -> list[dict]:
+    """Fetch latest video from a YouTube channel."""
     log.info("Scanning channel: %s (%s)", channel.name, channel.youtube_url)
     t0 = time.time()
 
     args = _yt_dlp_base_args() + [
         "--flat-playlist",
-        "--playlist-end", str(limit),
+        "--playlist-end", "1",
         "--dump-json",
         channel.youtube_url,
     ]
@@ -44,15 +44,91 @@ def _scan_channel(channel: Channel, limit: int = 10) -> list[dict]:
         except json.JSONDecodeError:
             continue
 
-    log.info("Found %d recent videos from %s (%.1fs)", len(videos), channel.name, time.time() - t0)
+    log.info("Found %d video(s) from %s (%.1fs)", len(videos), channel.name, time.time() - t0)
     return videos
 
 
-def _is_prediction_video(title: str, keywords_str: str) -> bool:
-    """Check if a video title suggests it contains UFC predictions."""
-    keywords = [k.strip() for k in keywords_str.split(",")] if keywords_str else ["predictions", "picks"]
+SKIP_KEYWORDS = ["recap", "reaction", "results", "responds", "reacts", "interview", "news"]
+
+
+def _classify_video(title: str, keywords_str: str, upcoming_event_name: str = None) -> str:
+    """Classify a video: 'prediction', 'skip', or 'uncertain'.
+
+    Rules:
+    1. Title contains skip keywords (recap, reaction) → skip
+    2. Title contains prediction keywords → prediction
+    3. Title mentions upcoming event → prediction
+    4. Otherwise → uncertain (needs transcript check)
+    """
     title_lower = title.lower()
-    return any(kw.lower() in title_lower for kw in keywords)
+
+    # Skip obvious non-predictions
+    if any(kw in title_lower for kw in SKIP_KEYWORDS):
+        return "skip"
+
+    # Check prediction keywords
+    keywords = [k.strip() for k in keywords_str.split(",")] if keywords_str else ["predictions", "picks"]
+    if any(kw.lower() in title_lower for kw in keywords):
+        return "prediction"
+
+    # Check if title mentions the upcoming event
+    if upcoming_event_name:
+        # Extract key parts: "UFC 328" → ["ufc", "328"]
+        import re
+        parts = re.findall(r'\w+', upcoming_event_name.lower())
+        if all(p in title_lower for p in parts if len(p) > 2):
+            return "prediction"
+
+    return "uncertain"
+
+
+def _classify_by_transcript_sample(video_url: str, video_id: str) -> bool:
+    """Grab first 60s of captions and ask LLM if it's a prediction video."""
+    import requests as req
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    captions = _fetch_youtube_captions_sample(video_url, video_id)
+    if not captions:
+        return False
+
+    OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+    if not OPENROUTER_API_KEY:
+        return False
+
+    response = req.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": "deepseek/deepseek-chat-v3-0324",
+            "messages": [
+                {"role": "system", "content": "Answer only 'yes' or 'no'."},
+                {"role": "user", "content": f"Is this the beginning of a video where someone makes fight predictions for an upcoming UFC event? First 500 chars:\n\n{captions[:500]}"},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 5,
+        },
+    )
+
+    if response.status_code != 200:
+        return False
+
+    answer = response.json()["choices"][0]["message"]["content"].strip().lower()
+    log.info("LLM classification for %s: %s", video_id, answer)
+    return "yes" in answer
+
+
+def _fetch_youtube_captions_sample(video_url: str, video_id: str) -> str | None:
+    """Fetch just the first portion of YouTube auto-captions."""
+    from extract_transcript import _fetch_youtube_captions
+    try:
+        text = _fetch_youtube_captions(video_url, video_id)
+        return text[:1000] if text else None
+    except Exception:
+        return None
 
 
 # ── Event matching ──────────────────────────────────────────
@@ -350,15 +426,56 @@ def _process_video(session, vid_id: str, video_url: str, video_title: str,
 
 # ── Main loop ────────────────────────────────────────────────
 
-def run_once(session, limit: int = 10, transcript_method: str = "auto"):
+def _get_upcoming_event(session) -> Event | None:
+    """Find the next upcoming event (date >= today)."""
+    from datetime import date
+    event = session.query(Event).filter(Event.date >= date.today()).order_by(Event.date).first()
+    return event
+
+
+def _score_unscored(session):
+    """Score any predictions that don't have scores yet (results came in after prediction)."""
+    unscored = session.query(Prediction).filter(
+        Prediction.event_id.isnot(None),
+        ~Prediction.score.has(),
+    ).all()
+
+    if not unscored:
+        return
+
+    log.info("Found %d unscored predictions, scoring...", len(unscored))
+    for pred in unscored:
+        event = session.query(Event).get(pred.event_id)
+        if event:
+            score = _score_prediction(session, pred, event)
+            if score:
+                session.add(score)
+
+    session.commit()
+
+
+def run_once(session, transcript_method: str = "auto"):
     """Run one scan cycle across all channels."""
+
+    # Step 0: Score any unscored predictions (results may have come in)
+    _score_unscored(session)
+
+    # Step 1: Check for upcoming event
+    upcoming = _get_upcoming_event(session)
+    if not upcoming:
+        log.info("No upcoming event found — skipping cycle")
+        return
+
+    log.info("Upcoming event: %s (%s)", upcoming.name, upcoming.date)
+
+    # Step 2: Scan channels (latest video only)
     channels = session.query(Channel).all()
     log.info("Scanning %d channels", len(channels))
 
     new_count = 0
 
     for channel in channels:
-        videos = _scan_channel(channel, limit=limit)
+        videos = _scan_channel(channel)
         keywords = channel.keywords or "predictions,picks"
 
         for video in videos:
@@ -368,14 +485,34 @@ def run_once(session, limit: int = 10, transcript_method: str = "auto"):
             if not vid_id:
                 continue
 
-            # Check DB for already processed
+            # Already in DB? Skip
             existing = session.query(Video).filter_by(video_id=vid_id).first()
             if existing:
                 continue
 
-            if not _is_prediction_video(title, keywords):
+            # Step 3: Classify
+            classification = _classify_video(title, keywords, upcoming.name)
+            log.info("[%s] \"%s\" → %s", channel.name, title[:60], classification)
+
+            if classification == "skip":
+                # Save as non-prediction so we don't check again
+                session.add(Video(video_id=vid_id, channel_id=channel.id,
+                                  title=title, is_prediction=False))
+                session.commit()
                 continue
 
+            if classification == "uncertain":
+                # Quick LLM check on first 60s of captions
+                video_url = f"https://www.youtube.com/watch?v={vid_id}"
+                is_pred = _classify_by_transcript_sample(video_url, vid_id)
+                if not is_pred:
+                    log.info("  LLM says not a prediction video — skipping")
+                    session.add(Video(video_id=vid_id, channel_id=channel.id,
+                                      title=title, is_prediction=False))
+                    session.commit()
+                    continue
+
+            # It's a prediction video — process it
             log.info("")
             log.info("=" * 50)
             log.info("NEW PREDICTION VIDEO FOUND")
@@ -391,10 +528,8 @@ def run_once(session, limit: int = 10, transcript_method: str = "auto"):
                     new_count += 1
             except Exception as e:
                 log.error("Failed to process %s: %s", vid_id, e, exc_info=True)
-                # Save as non-prediction to avoid retrying
-                failed = Video(video_id=vid_id, channel_id=channel.id,
-                               title=title, is_prediction=False)
-                session.add(failed)
+                session.add(Video(video_id=vid_id, channel_id=channel.id,
+                                  title=title, is_prediction=False))
                 session.commit()
 
     if new_count:
@@ -427,7 +562,7 @@ def monitor(interval_min: int = 15, transcript_method: str = "auto"):
         try:
             log.info("")
             log.info("--- Scan cycle starting at %s ---", time.strftime("%Y-%m-%d %H:%M:%S"))
-            run_once(session, transcript_method=transcript_method)
+            run_once(session, transcript_method)
         except Exception as e:
             log.error("Cycle failed: %s", e, exc_info=True)
             session.rollback()
@@ -459,6 +594,6 @@ if __name__ == "__main__":
 
     if args.once:
         session = SessionLocal()
-        run_once(session, transcript_method=args.method)
+        run_once(session, args.method)
     else:
         monitor(interval_min=args.interval, transcript_method=args.method)
