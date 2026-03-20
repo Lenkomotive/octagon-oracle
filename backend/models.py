@@ -23,7 +23,7 @@ class Event(Base):
     name = Column(String, nullable=False)
     slug = Column(String, unique=True, nullable=False)
     date = Column(Date)
-    ufcstats_url = Column(String)
+    wiki_path = Column(String)
 
     fights = relationship("Fight", back_populates="event")
     predictions = relationship("Prediction", back_populates="event")
@@ -52,7 +52,6 @@ class Channel(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     youtube_url = Column(String, nullable=False)
-    keywords = Column(String)  # comma-separated
 
     videos = relationship("Video", back_populates="channel")
 

@@ -47,30 +47,9 @@
                         │ new videos found
                         ▼
             ┌────────────────────────┐
-            │  3. CLASSIFY VIDEO     │
+            │  3. TRANSCRIPT         │
             │                        │
-            │  Quick check:          │
-            │  a) Title keywords?    │
-            │     → likely prediction│
-            │  b) Title mentions     │
-            │     upcoming event?    │
-            │     → likely prediction│
-            │  c) Title says "recap" │
-            │     "reaction"?        │
-            │     → skip             │
-            │  d) Uncertain?         │
-            │     → grab first 60s   │
-            │       of captions,     │
-            │       ask LLM yes/no   │
-            │                        │
-            │  Save classification   │
-            │  to videos table       │
-            └───────────┬────────────┘
-                        │ is_prediction = true
-                        ▼
-            ┌────────────────────────┐
-            │  4. TRANSCRIPT         │
-            │                        │
+            │  For each new video:   │
             │  Try YouTube captions  │
             │  (free, fast)          │
             │  ↓ fallback            │
@@ -81,6 +60,20 @@
             │  videos.transcript     │
             └───────────┬────────────┘
                         │
+                        ▼
+            ┌────────────────────────┐
+            │  4. CLASSIFY VIDEO     │
+            │                        │
+            │  LLM checks transcript:│
+            │  "Is this a prediction │
+            │   video for an         │
+            │   upcoming UFC event?" │
+            │                        │
+            │  No → save video,      │
+            │       is_prediction=F  │
+            │       → next channel   │
+            └───────────┬────────────┘
+                        │ is_prediction = true
                         ▼
             ┌────────────────────────┐
             │  5. EXTRACT PICKS      │
@@ -157,8 +150,8 @@
 
 1. Only process videos during FIGHT WEEK (upcoming event exists)
 2. Only check the LATEST video per channel (not last 10)
-3. Classify before processing (don't waste API on recaps)
-4. Use event from DB to match, not title parsing
+3. Always transcribe, then LLM classifies from transcript
+4. No keyword filtering — LLM decides if it's a prediction video
 5. Score happens twice:
    - Immediately if results exist
    - Deferred after event completes (Monday refresh)
