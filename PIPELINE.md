@@ -50,11 +50,10 @@
             │  3. TRANSCRIPT         │
             │                        │
             │  For each new video:   │
-            │  Try YouTube captions  │
-            │  (free, fast)          │
-            │  ↓ fallback            │
             │  Groq Whisper          │
             │  (whisper-large-v3)    │
+            │  ↓ fallback            │
+            │  YouTube captions      │
             │                        │
             │  Save to               │
             │  videos.transcript     │
