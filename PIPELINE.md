@@ -1,10 +1,12 @@
 # Octagon Oracle Pipeline
 
-## Flow
+## Two pipelines
+
+### Pipeline A: COLLECT PREDICTIONS (before event, every 15min)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                  MONITOR (every 15min)                   │
+│              MONITOR (every 15min)                       │
 └────────────────────────┬────────────────────────────────┘
                          │
                          ▼
@@ -15,9 +17,6 @@
             │  List_of_UFC_events    │
             │  - Add new upcoming    │
             │    events to DB        │
-            │  - Fetch results for   │
-            │    last 3 completed    │
-            │    events if missing   │
             │                        │
             │  (Old events already   │
             │   seeded in DB)        │
@@ -46,19 +45,17 @@
             │  - Already in DB?      │
             │    → skip              │
             └───────────┬────────────┘
-                        │ new videos found
+                        │ new video found
                         ▼
             ┌────────────────────────┐
             │  3. TRANSCRIPT         │
             │                        │
-            │  For each new video:   │
             │  Groq Whisper          │
             │  (whisper-large-v3)    │
             │  ↓ fallback            │
             │  YouTube captions      │
             │                        │
-            │  Save to               │
-            │  videos.transcript     │
+            │  Keep in memory only   │
             └───────────┬────────────┘
                         │
                         ▼
@@ -72,6 +69,7 @@
             │                        │
             │  No → save video,      │
             │       is_prediction=F  │
+            │       no transcript    │
             │       → next channel   │
             └───────────┬────────────┘
                         │ is_prediction = true
@@ -97,49 +95,59 @@
             │  against card, retry   │
             │  if mismatch           │
             │                        │
-            │  Save to               │
-            │  predictions table     │
+            │  Save video with       │
+            │  transcript + picks    │
+            │  to DB                 │
+            └────────────────────────┘
+```
+
+
+### Pipeline B: SCORE PREDICTIONS (after event)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│          TRIGGERED: after event completes               │
+│          (check on refresh_upcoming cycle)              │
+└────────────────────────┬────────────────────────────────┘
+                         │
+                         ▼
+            ┌────────────────────────┐
+            │  1. FETCH RESULTS      │
+            │                        │
+            │  Scrape Wikipedia      │
+            │  event page for        │
+            │  fight results         │
+            │                        │
+            │  Update fights table   │
+            │  with winner, method,  │
+            │  round, time           │
             └───────────┬────────────┘
                         │
                         ▼
             ┌────────────────────────┐
-            │  6. SCORE              │
+            │  2. SCORE PREDICTIONS  │
             │                        │
-            │  If event has results: │
-            │  - Match each pick to  │
-            │    fights table        │
+            │  Find all unscored     │
+            │  predictions for this  │
+            │  event                 │
+            │                        │
+            │  Match each pick to    │
+            │  fight result:         │
             │  - correct / incorrect │
             │  - method_correct      │
             │                        │
-            │  If event upcoming:    │
-            │  - Skip scoring        │
-            │  - Score later when    │
-            │    results come in     │
-            │                        │
             │  Save to scores table  │
-            └───────────┬────────────┘
-                        │
-                        ▼
-            ┌────────────────────────┐
-            │  7. RESULTS REFRESH    │
-            │  (Monday after event)  │
-            │                        │
-            │  Fetch results from    │
-            │  ufcstats.com          │
-            │  Update fights table   │
-            │  Score any unscored    │
-            │  predictions           │
             └────────────────────────┘
+```
 
 
 ## Data Flow
 
-    Wikipedia ──→ Events list (upcoming + past)
+    Wikipedia ──→ Events + fight cards (before event)
                       │
-    YouTube ──→ yt-dlp ──→ Transcript ──→ LLM ──→ Predictions
+    YouTube ──→ Whisper ──→ Transcript ──→ LLM ──→ Predictions
                                                        │
-    Wikipedia event page ──→ Results ──→ Fights ───────┤
-    (or ufcstats.com)                                  │
+    Wikipedia ──→ Results (after event) ──→ Fights ────┤
                                                        ▼
                                                     Scores
                                                        │
@@ -153,9 +161,8 @@
 2. Only check the LATEST video per channel (not last 10)
 3. Always transcribe, then LLM classifies from transcript
 4. No keyword filtering — LLM decides if it's a prediction video
-5. Score happens twice:
-   - Immediately if results exist
-   - Deferred after event completes (Monday refresh)
+5. Only save transcript to DB if it's a prediction video
+6. Scoring is SEPARATE — runs after event completes, not during collection
 
 
 ## Models
@@ -163,8 +170,8 @@
 | Step        | Model                          | Provider    |
 |-------------|--------------------------------|-------------|
 | Transcript  | whisper-large-v3               | Groq        |
-| Extraction  | deepseek/deepseek-chat-v3-0324 | OpenRouter  |
 | Classify    | deepseek/deepseek-chat-v3-0324 | OpenRouter  |
+| Extraction  | deepseek/deepseek-chat-v3-0324 | OpenRouter  |
 
 
 ## Database Tables
