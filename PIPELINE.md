@@ -9,16 +9,18 @@
                          │
                          ▼
             ┌────────────────────────┐
-            │  0. REFRESH EVENTS     │
+            │  0. REFRESH UPCOMING   │
             │                        │
             │  Scrape Wikipedia:     │
             │  List_of_UFC_events    │
-            │  - Upcoming events     │
-            │  - Past events         │
-            │  Add new events to DB  │
-            │  Fetch results for     │
-            │  completed events      │
-            │  that have no results  │
+            │  - Add new upcoming    │
+            │    events to DB        │
+            │  - Fetch results for   │
+            │    last 3 completed    │
+            │    events if missing   │
+            │                        │
+            │  (Old events already   │
+            │   seeded in DB)        │
             └───────────┬────────────┘
                         │
                         ▼
