@@ -21,7 +21,7 @@ def classify_video(transcript_text: str) -> bool:
     Uses first 1000 chars to save tokens.
     Returns True if prediction video, False otherwise.
     """
-    sample = transcript_text[:1000]
+    sample = transcript_text[:2000]
 
     log.info("Classifying transcript (%d chars sample)...", len(sample))
     t0 = time.time()
@@ -35,8 +35,8 @@ def classify_video(transcript_text: str) -> bool:
         json={
             "model": MODEL,
             "messages": [
-                {"role": "system", "content": "Answer only 'yes' or 'no'."},
-                {"role": "user", "content": f"Is this a video where someone makes fight predictions/picks for an upcoming UFC event? Transcript sample:\n\n{sample}"},
+                {"role": "system", "content": "Answer only 'yes' or 'no'. A prediction video is one where someone picks winners for upcoming UFC fights. Look for phrases like 'I'm going with', 'my pick is', 'prediction', 'I think X beats Y', 'breakdown', etc."},
+                {"role": "user", "content": f"Is this a UFC prediction video where someone picks winners for upcoming fights?\n\n{sample}"},
             ],
             "temperature": 0.0,
             "max_tokens": 5,
