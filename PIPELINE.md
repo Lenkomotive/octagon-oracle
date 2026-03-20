@@ -67,10 +67,15 @@
                      ┌────────────────────────┐
                      │  4. CLASSIFY VIDEO     │
                      │                        │
-                     │  LLM checks transcript:│
+                     │  4 models in parallel: │
+                     │  - Gemini 2.5 Flash    │
+                     │  - DeepSeek V3.2       │
+                     │  - StepFun 3.5 Flash   │
+                     │  - GPT-OSS 120B        │
+                     │                        │
+                     │  Majority vote:        │
                      │  "Is this a prediction │
-                     │   video for an         │
-                     │   upcoming UFC event?" │
+                     │   video?"              │
                      │                        │
                      │  No → save video,      │
                      │       is_prediction=F  │
@@ -82,23 +87,27 @@
                      ┌────────────────────────┐
                      │  5. EXTRACT PICKS      │
                      │                        │
-                     │  LLM: DeepSeek v3      │
-                     │  (via OpenRouter)      │
+                     │  Same 4 models in      │
+                     │  parallel, consensus:  │
                      │                        │
                      │  Input:                │
                      │  - transcript          │
                      │  - fight card from     │
                      │    fights table        │
                      │                        │
-                     │  Output:               │
+                     │  Output (consensus):   │
                      │  - fighter_picked      │
                      │  - fighter_against     │
                      │  - method              │
-                     │  - confidence          │
+                     │  - confidence (based   │
+                     │    on model agreement) │
+                     │  - models_agreed (2-4) │
+                     │                        │
+                     │  Pick included only if │
+                     │  2+ models agree       │
                      │                        │
                      │  Validate all names    │
-                     │  against card, retry   │
-                     │  if mismatch           │
+                     │  against card          │
                      │                        │
                      │  Save video with       │
                      │  transcript + picks    │
@@ -110,34 +119,36 @@
 
     Wikipedia ──→ Events + fight cards (before event)
                       │
-    YouTube ──→ Whisper ──→ Transcript ──→ LLM ──→ Predictions
-                                                       │
-    Wikipedia ──→ Results (after event) ──→ Fights ────┤
-                                                       ▼
-                                                    Scores
-                                                       │
-                                                       ▼
-                                                   Website
+    YouTube ──→ Whisper ──→ Transcript ──→ 4x LLMs ──→ Consensus Predictions
+                                                            │
+    Wikipedia ──→ Results (after event) ──→ Fights ─────────┤
+                                                            ▼
+                                                         Scores
+                                                            │
+                                                            ▼
+                                                        Website
 
 
 ## Key Rules
 
 1. Only process videos during FIGHT WEEK (upcoming event exists)
 2. Only check the LATEST video per channel (not last 10)
-3. Always transcribe, then LLM classifies from transcript
-4. No keyword filtering — LLM decides if it's a prediction video
+3. Always transcribe, then LLMs classify from transcript
+4. No keyword filtering — LLM majority vote decides
 5. Only save transcript to DB if it's a prediction video
-6. Scoring piggybacks on step 0 — when results are fetched for a
+6. Extraction uses 4 models in parallel, consensus (2+ agree)
+7. Confidence = high (4/4), medium (3/4), low (2/4)
+8. Scoring piggybacks on step 0 — when results are fetched for a
    completed event, all unscored predictions are scored immediately
 
 
-## Models
+## Models (all free on OpenRouter)
 
-| Step        | Model                          | Provider    |
-|-------------|--------------------------------|-------------|
-| Transcript  | whisper-large-v3               | Groq        |
-| Classify    | deepseek/deepseek-chat-v3-0324 | OpenRouter  |
-| Extraction  | deepseek/deepseek-chat-v3-0324 | OpenRouter  |
+| Step        | Models                                                    |
+|-------------|-----------------------------------------------------------|
+| Transcript  | whisper-large-v3 (Groq) → YouTube captions fallback       |
+| Classify    | Gemini 2.5 Flash, DeepSeek V3.2, StepFun 3.5, GPT-OSS    |
+| Extraction  | Gemini 2.5 Flash, DeepSeek V3.2, StepFun 3.5, GPT-OSS    |
 
 
 ## Database Tables
