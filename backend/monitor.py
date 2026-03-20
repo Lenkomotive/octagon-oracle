@@ -1,57 +1,38 @@
 #!/usr/bin/env python3
 """Octagon Oracle Monitor — watches YouTube channels for new UFC prediction
-videos, extracts transcripts and predictions on a recurring loop."""
+videos, extracts transcripts and predictions, scores them. All data in Postgres."""
 
 import json
 import logging
 import os
 import subprocess
-import sys
 import time
+from datetime import datetime
 
+from models import SessionLocal, Channel, Video, Event, Fight, Prediction, Score
 from extract_transcript import extract_transcript, _yt_dlp_base_args
-from extract_predictions import extract_predictions
 from fetch_card import detect_event_from_title
-from fetch_all_results import get_event_list, fetch_event_results
 
 log = logging.getLogger("monitor")
-
-PROCESSED_PATH = os.path.join(os.path.dirname(__file__), "processed.json")
-CHANNELS_PATH = os.path.join(os.path.dirname(__file__), "channels.json")
-
-
-# ── Processed video tracking ────────────────────────────────
-
-def _load_processed() -> set[str]:
-    if os.path.isfile(PROCESSED_PATH):
-        with open(PROCESSED_PATH) as f:
-            return set(json.load(f))
-    return set()
-
-
-def _save_processed(processed: set[str]):
-    with open(PROCESSED_PATH, "w") as f:
-        json.dump(sorted(processed), f, indent=2)
 
 
 # ── Channel scanning ────────────────────────────────────────
 
-def _scan_channel(channel: dict, limit: int = 10) -> list[dict]:
-    """Fetch recent videos from a YouTube channel. Returns list of video info dicts."""
-    url = channel["url"]
-    log.info("Scanning channel: %s (%s)", channel["name"], url)
+def _scan_channel(channel: Channel, limit: int = 10) -> list[dict]:
+    """Fetch recent videos from a YouTube channel."""
+    log.info("Scanning channel: %s (%s)", channel.name, channel.youtube_url)
     t0 = time.time()
 
     args = _yt_dlp_base_args() + [
         "--flat-playlist",
         "--playlist-end", str(limit),
         "--dump-json",
-        url,
+        channel.youtube_url,
     ]
 
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
-        log.error("Failed to scan %s: %s", channel["name"], result.stderr[:300])
+        log.error("Failed to scan %s: %s", channel.name, result.stderr[:300])
         return []
 
     videos = []
@@ -63,133 +44,322 @@ def _scan_channel(channel: dict, limit: int = 10) -> list[dict]:
         except json.JSONDecodeError:
             continue
 
-    log.info("Found %d recent videos from %s (%.1fs)", len(videos), channel["name"], time.time() - t0)
+    log.info("Found %d recent videos from %s (%.1fs)", len(videos), channel.name, time.time() - t0)
     return videos
 
 
-def _is_prediction_video(title: str, keywords: list[str]) -> bool:
+def _is_prediction_video(title: str, keywords_str: str) -> bool:
     """Check if a video title suggests it contains UFC predictions."""
+    keywords = [k.strip() for k in keywords_str.split(",")] if keywords_str else ["predictions", "picks"]
     title_lower = title.lower()
     return any(kw.lower() in title_lower for kw in keywords)
 
 
-# ── Results lookup ────────────────────────────────────────────
+# ── Event matching ──────────────────────────────────────────
 
-def _find_results_file(event_name: str) -> str | None:
-    """Find a local results file matching the event name. Returns path or None."""
-    results_dir = os.path.join(os.path.dirname(__file__), "results")
-    if not os.path.isdir(results_dir):
+def _match_event(session, video_title: str) -> Event | None:
+    """Try to match a video title to an event in the DB."""
+    event_name = detect_event_from_title(video_title)
+    if not event_name:
         return None
 
-    event_lower = event_name.lower()
+    # Try exact-ish match on event name
+    event = session.query(Event).filter(Event.name.ilike(f"%{event_name}%")).first()
+    if event:
+        log.info("Matched event: %s -> %s", event_name, event.name)
+        return event
 
-    # Check index first
-    index_path = os.path.join(results_dir, "_index.json")
-    if os.path.isfile(index_path):
-        with open(index_path) as f:
-            index = json.load(f)
-        for entry in index:
-            if event_lower in entry.get("name", "").lower():
-                path = entry.get("file")
-                if path and os.path.isfile(path):
-                    return path
+    # Try matching numbered events like "UFC 326"
+    import re
+    m = re.search(r'UFC\s+(\d+)', event_name, re.IGNORECASE)
+    if m:
+        num = m.group(1)
+        event = session.query(Event).filter(Event.name.ilike(f"%UFC {num}%")).first()
+        if event:
+            log.info("Matched event by number: UFC %s -> %s", num, event.name)
+            return event
 
-    # Fallback: fuzzy match on filenames
-    for fname in os.listdir(results_dir):
-        if not fname.endswith(".json") or fname.startswith("_"):
-            continue
-        # Compare normalized names
-        fname_lower = fname.replace("_", " ").replace(".json", "").lower()
-        # Check if key parts of event name appear in filename
-        parts = [p for p in event_lower.replace("ufc", "").split() if len(p) > 2]
-        if all(p in fname_lower for p in parts):
-            return os.path.join(results_dir, fname)
-
+    log.warning("No event match found for: %s", event_name)
     return None
 
 
-def _get_results_for_event(event_name: str) -> str | None:
-    """Find or fetch results for an event. Returns results file path or None."""
-    # Try local first
-    path = _find_results_file(event_name)
-    if path:
-        log.info("Found local results: %s -> %s", event_name, path)
-        return path
+# ── Prediction extraction (DB-native) ──────────────────────
 
-    # Try fetching from ufcstats.com
-    log.info("No local results for %s, checking ufcstats.com...", event_name)
-    try:
-        events = get_event_list(since_event="UFC 280")
-        for ev in events:
-            if event_name.lower() in ev["name"].lower():
-                result = fetch_event_results(ev["ufcstats_url"])
-                os.makedirs("results", exist_ok=True)
-                slug = result["event"].replace(" ", "_").replace(":", "").replace(".", "")
-                out_path = f"results/{slug}.json"
-                with open(out_path, "w") as f:
-                    json.dump(result, f, indent=2)
-                log.info("Fetched and saved: %s -> %s", event_name, out_path)
-                return out_path
-    except Exception as e:
-        log.error("Failed to fetch results for %s: %s", event_name, e)
+def _extract_predictions_db(session, transcript_text: str, video_title: str,
+                            uploader: str, event: Event | None) -> list[dict]:
+    """Call LLM to extract predictions, using fight names from DB."""
+    import requests
+    from dotenv import load_dotenv
+    load_dotenv()
 
+    OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+    MODEL = "deepseek/deepseek-chat-v3-0324"
+
+    SYSTEM_PROMPT = """You are a UFC prediction extractor. Given a transcript from a YouTube video where someone discusses upcoming UFC fights and makes predictions, extract all fight predictions.
+
+For each prediction, extract:
+- "fighter_picked": the fighter the YouTuber thinks will win
+- "fighter_against": the opponent
+- "method": predicted method of victory if mentioned (e.g. "KO", "submission", "decision"), or null if not specified
+- "confidence": "high", "medium", or "low" based on how confident the YouTuber sounds, default to "medium" if unclear
+
+IMPORTANT: If a fight card with correct fighter names is provided, you MUST use those exact names in your output. Match the transcript's (often misspelled/mispronounced) names to the closest fighter on the card. Every prediction should use a name from the fight card.
+
+Return ONLY valid JSON in this exact format:
+{
+  "predictions": [
+    {
+      "fighter_picked": "Fighter Name",
+      "fighter_against": "Opponent Name",
+      "method": "KO" | "submission" | "decision" | null,
+      "confidence": "high" | "medium" | "low"
+    }
+  ]
+}
+
+If no predictions are found, return {"predictions": []}.
+Return ONLY the JSON, no other text."""
+
+    user_content = f"Video title: {video_title}\nUploader: {uploader}\n\n"
+
+    # Add fight card from DB if we have the event
+    fights = []
+    if event:
+        fights = session.query(Fight).filter_by(event_id=event.id).all()
+        if fights:
+            fights_list = "\n".join(f"- {f.fighter1} vs {f.fighter2}" for f in fights)
+            user_content += f"OFFICIAL FIGHT CARD (use these exact names):\n{fights_list}\n\n"
+
+    user_content += f"Transcript:\n{transcript_text}"
+
+    log.info("Calling LLM (model=%s)...", MODEL)
+    t0 = time.time()
+
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.0,
+        },
+    )
+
+    elapsed = time.time() - t0
+
+    if response.status_code != 200:
+        raise RuntimeError(f"OpenRouter error: {response.status_code} {response.text[:300]}")
+
+    data = response.json()
+    content = data["choices"][0]["message"]["content"].strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1]
+        content = content.rsplit("```", 1)[0].strip()
+
+    usage = data.get("usage", {})
+    log.info("LLM response: %d chars, %d prompt/%d completion tokens (%.1fs)",
+             len(content), usage.get("prompt_tokens", 0),
+             usage.get("completion_tokens", 0), elapsed)
+
+    result = json.loads(content)
+
+    # Validate names against card
+    if fights:
+        card_names = set()
+        for f in fights:
+            card_names.add(f.fighter1.lower().strip())
+            card_names.add(f.fighter2.lower().strip())
+
+        unmatched = []
+        for p in result.get("predictions", []):
+            if p["fighter_picked"].lower().strip() not in card_names:
+                unmatched.append(p["fighter_picked"])
+            if p["fighter_against"].lower().strip() not in card_names:
+                unmatched.append(p["fighter_against"])
+
+        if unmatched:
+            log.warning("Unmatched names: %s — requesting correction", unmatched)
+            fights_list = "\n".join(f"- {f.fighter1} vs {f.fighter2}" for f in fights)
+            correction = f"""The following fighter names do NOT match anyone on the official fight card:
+{', '.join(set(unmatched))}
+
+Official fight card:
+{fights_list}
+
+Please fix the predictions to use the exact names from the fight card.
+Return the complete corrected JSON (same format as before)."""
+
+            response2 = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": MODEL,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_content},
+                        {"role": "assistant", "content": content},
+                        {"role": "user", "content": correction},
+                    ],
+                    "temperature": 0.0,
+                },
+            )
+            if response2.status_code == 200:
+                content2 = response2.json()["choices"][0]["message"]["content"].strip()
+                if content2.startswith("```"):
+                    content2 = content2.split("\n", 1)[1]
+                    content2 = content2.rsplit("```", 1)[0].strip()
+                result = json.loads(content2)
+                log.info("Correction applied")
+
+    return result.get("predictions", [])
+
+
+# ── Scoring (DB-native) ────────────────────────────────────
+
+def _score_prediction(session, prediction: Prediction, event: Event) -> Score | None:
+    """Score a single prediction against actual fight results."""
+    fights = session.query(Fight).filter_by(event_id=event.id).all()
+
+    picked_norm = prediction.fighter_picked.lower().strip()
+    against_norm = prediction.fighter_against.lower().strip()
+
+    for fight in fights:
+        f1 = fight.fighter1.lower().strip()
+        f2 = fight.fighter2.lower().strip()
+
+        if picked_norm in (f1, f2) or against_norm in (f1, f2):
+            if not fight.winner:
+                return None  # fight hasn't happened yet
+
+            correct = fight.winner.lower().strip() == picked_norm
+
+            method_correct = None
+            if prediction.method and fight.method:
+                pm = prediction.method.lower()
+                am = fight.method.lower()
+                if pm == "ko":
+                    method_correct = "ko" in am or "tko" in am
+                elif pm == "submission":
+                    method_correct = "sub" in am
+                elif pm == "decision":
+                    method_correct = "dec" in am
+
+            score = Score(
+                prediction_id=prediction.id,
+                fight_id=fight.id,
+                correct=correct,
+                method_correct=method_correct,
+            )
+
+            icon = "CORRECT" if correct else "WRONG"
+            log.info("  %s: %s over %s (actual: %s by %s)",
+                     icon, prediction.fighter_picked, prediction.fighter_against,
+                     fight.winner, fight.method)
+            return score
+
+    log.warning("  No matching fight for: %s vs %s", prediction.fighter_picked, prediction.fighter_against)
     return None
 
 
 # ── Process a single video ───────────────────────────────────
 
-def _process_video(video_id: str, video_url: str, video_title: str,
-                   channel_name: str, transcript_method: str) -> dict | None:
-    """Process a single prediction video end-to-end. Returns predictions dict or None."""
-    log.info("Processing: [%s] \"%s\" (%s)", channel_name, video_title[:70], video_id)
+def _process_video(session, vid_id: str, video_url: str, video_title: str,
+                   channel: Channel, transcript_method: str) -> bool:
+    """Process a single prediction video end-to-end. Returns True on success."""
+    log.info("Processing: [%s] \"%s\" (%s)", channel.name, video_title[:70], vid_id)
     t0 = time.time()
 
-    # 1. Detect event
-    event_name = detect_event_from_title(video_title)
-    if not event_name:
-        log.warning("Could not detect event from title: \"%s\" — processing without card", video_title)
+    # 1. Match event
+    event = _match_event(session, video_title)
 
-    # 2. Get results file (used as fight list for name validation)
-    results_path = None
-    if event_name:
-        results_path = _get_results_for_event(event_name)
-
-    # 3. Transcript
-    log.info("Step 1/2: Fetching transcript...")
+    # 2. Transcript
+    log.info("Step 1/3: Fetching transcript...")
     transcript = extract_transcript(video_url, method=transcript_method)
 
-    os.makedirs("transcripts", exist_ok=True)
-    t_path = f"transcripts/{transcript['video_id']}.json"
-    with open(t_path, "w") as f:
-        json.dump(transcript, f, indent=2)
+    # 3. Save video to DB
+    upload_date = None
+    if transcript.get("upload_date"):
+        try:
+            upload_date = datetime.strptime(transcript["upload_date"], "%Y%m%d").date()
+        except (ValueError, TypeError):
+            pass
+
+    video = Video(
+        video_id=vid_id,
+        channel_id=channel.id,
+        title=video_title,
+        upload_date=upload_date,
+        is_prediction=True,
+        transcript=transcript["full_text"],
+        transcript_method=transcript.get("transcript_method", "unknown"),
+    )
+    session.add(video)
+    session.flush()
 
     # 4. Extract predictions
-    log.info("Step 2/2: Extracting predictions...")
-    predictions = extract_predictions(t_path, results_path)
+    log.info("Step 2/3: Extracting predictions...")
+    raw_predictions = _extract_predictions_db(
+        session, transcript["full_text"], video_title,
+        transcript.get("uploader", channel.name), event,
+    )
 
-    os.makedirs("predictions", exist_ok=True)
-    p_path = f"predictions/{video_id}.json"
-    with open(p_path, "w") as f:
-        json.dump(predictions, f, indent=2)
+    # 5. Save predictions to DB
+    predictions = []
+    for p in raw_predictions:
+        pred = Prediction(
+            video_id=video.id,
+            event_id=event.id if event else None,
+            fighter_picked=p["fighter_picked"],
+            fighter_against=p["fighter_against"],
+            method=p.get("method"),
+            confidence=p.get("confidence", "medium"),
+        )
+        session.add(pred)
+        predictions.append(pred)
+    session.flush()
 
-    n = len(predictions.get("predictions", []))
-    log.info("Done: %d predictions from %s (%.1fs)", n, channel_name, time.time() - t0)
-    return predictions
+    # 6. Score predictions
+    log.info("Step 3/3: Scoring predictions...")
+    correct = 0
+    total = 0
+    if event:
+        for pred in predictions:
+            score = _score_prediction(session, pred, event)
+            if score:
+                session.add(score)
+                total += 1
+                if score.correct:
+                    correct += 1
+
+    session.commit()
+
+    accuracy = (correct / total * 100) if total > 0 else 0
+    log.info("Done: %d predictions, %d/%d correct (%.1f%%) from %s (%.1fs)",
+             len(predictions), correct, total, accuracy, channel.name, time.time() - t0)
+    return True
 
 
 # ── Main loop ────────────────────────────────────────────────
 
-def run_once(channels: list[dict], limit: int = 10, transcript_method: str = "auto"):
+def run_once(session, limit: int = 10, transcript_method: str = "auto"):
     """Run one scan cycle across all channels."""
-    processed = _load_processed()
-    log.info("Loaded %d previously processed video IDs", len(processed))
+    channels = session.query(Channel).all()
+    log.info("Scanning %d channels", len(channels))
 
     new_count = 0
-    results = []
 
     for channel in channels:
         videos = _scan_channel(channel, limit=limit)
-        keywords = channel.get("keywords", ["predictions", "picks"])
+        keywords = channel.keywords or "predictions,picks"
 
         for video in videos:
             vid_id = video.get("id")
@@ -197,11 +367,13 @@ def run_once(channels: list[dict], limit: int = 10, transcript_method: str = "au
 
             if not vid_id:
                 continue
-            if vid_id in processed:
-                log.debug("Already processed: %s", vid_id)
+
+            # Check DB for already processed
+            existing = session.query(Video).filter_by(video_id=vid_id).first()
+            if existing:
                 continue
+
             if not _is_prediction_video(title, keywords):
-                log.debug("Not a prediction video: \"%s\"", title[:60])
                 continue
 
             log.info("")
@@ -211,46 +383,33 @@ def run_once(channels: list[dict], limit: int = 10, transcript_method: str = "au
 
             video_url = f"https://www.youtube.com/watch?v={vid_id}"
             try:
-                predictions = _process_video(
-                    vid_id, video_url, title,
-                    channel["name"], transcript_method,
+                success = _process_video(
+                    session, vid_id, video_url, title,
+                    channel, transcript_method,
                 )
-                if predictions:
-                    results.append(predictions)
+                if success:
                     new_count += 1
             except Exception as e:
                 log.error("Failed to process %s: %s", vid_id, e, exc_info=True)
+                # Save as non-prediction to avoid retrying
+                failed = Video(video_id=vid_id, channel_id=channel.id,
+                               title=title, is_prediction=False)
+                session.add(failed)
+                session.commit()
 
-            # Mark as processed even on failure to avoid retry loops
-            processed.add(vid_id)
-            _save_processed(processed)
-
-    # Summary
     if new_count:
         log.info("")
         log.info("=" * 50)
         log.info("CYCLE COMPLETE — %d new video(s) processed", new_count)
         log.info("=" * 50)
-        for pred in results:
-            log.info("")
-            log.info("  %s — %s:", pred.get("uploader", "?"), pred.get("event", "?"))
-            for p in pred.get("predictions", []):
-                method = f" by {p['method']}" if p.get("method") else ""
-                log.info("    %s over %s%s (%s)",
-                         p["fighter_picked"], p["fighter_against"], method, p["confidence"])
     else:
         log.info("No new prediction videos found this cycle")
-
-    return results
 
 
 def monitor(interval_min: int = 15, transcript_method: str = "auto"):
     """Run the monitor loop indefinitely."""
-    with open(CHANNELS_PATH) as f:
-        config = json.load(f)
-
-    channels = config["channels"]
-    limit = config.get("check_last_n_videos", 10)
+    session = SessionLocal()
+    channels = session.query(Channel).all()
 
     log.info("=" * 60)
     log.info("  OCTAGON ORACLE MONITOR")
@@ -258,18 +417,20 @@ def monitor(interval_min: int = 15, transcript_method: str = "auto"):
     log.info("  Interval: %d min", interval_min)
     log.info("  Transcript method: %s", transcript_method)
     log.info("  Models: whisper-large-v3 (Groq), deepseek/deepseek-chat-v3-0324 (OpenRouter)")
+    log.info("  Storage: PostgreSQL")
     log.info("=" * 60)
 
     for ch in channels:
-        log.info("  - %s (%s)", ch["name"], ", ".join(ch.get("keywords", [])))
+        log.info("  - %s", ch.name)
 
     while True:
         try:
             log.info("")
             log.info("--- Scan cycle starting at %s ---", time.strftime("%Y-%m-%d %H:%M:%S"))
-            run_once(channels, limit=limit, transcript_method=transcript_method)
+            run_once(session, transcript_method=transcript_method)
         except Exception as e:
             log.error("Cycle failed: %s", e, exc_info=True)
+            session.rollback()
 
         log.info("Next scan in %d minutes...", interval_min)
         time.sleep(interval_min * 60)
@@ -288,8 +449,6 @@ if __name__ == "__main__":
                         help="Transcript method (default: auto)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Enable debug logging")
-    parser.add_argument("--reprocess", nargs="*",
-                        help="Force reprocess specific video IDs")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -298,19 +457,8 @@ if __name__ == "__main__":
         datefmt="%H:%M:%S",
     )
 
-    # Handle reprocessing
-    if args.reprocess:
-        processed = _load_processed()
-        for vid in args.reprocess:
-            processed.discard(vid)
-            log.info("Unmarked for reprocessing: %s", vid)
-        _save_processed(processed)
-
     if args.once:
-        with open(CHANNELS_PATH) as f:
-            config = json.load(f)
-        run_once(config["channels"],
-                 limit=config.get("check_last_n_videos", 10),
-                 transcript_method=args.method)
+        session = SessionLocal()
+        run_once(session, transcript_method=args.method)
     else:
         monitor(interval_min=args.interval, transcript_method=args.method)
