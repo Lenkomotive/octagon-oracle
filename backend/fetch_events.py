@@ -298,84 +298,6 @@ def fetch_event_card(wiki_path: str) -> dict | None:
 
 # ── DB sync ─────────────────────────────────────────────────
 
-def sync_events_to_db(session, since_event: str = "UFC 300"):
-    """Sync Wikipedia events to the database.
-
-    First run: imports all events from since_event to now + upcoming.
-    Subsequent runs: only adds new events and updates fight cards/results.
-    """
-    from models import Event, Fight
-
-    data = fetch_event_list()
-
-    # Find cutoff in past events
-    cutoff_idx = len(data["past"])
-    for i, e in enumerate(data["past"]):
-        if since_event.lower() in e["name"].lower():
-            cutoff_idx = i + 1
-            break
-
-    past_events = data["past"][:cutoff_idx]
-    all_events = data["upcoming"] + past_events
-
-    added = 0
-    updated = 0
-
-    for ev in all_events:
-        slug = ev["slug"]
-        if not slug:
-            continue
-
-        existing = session.query(Event).filter_by(slug=slug).first()
-
-        if not existing:
-            # New event — add it
-            event_date = None
-            if ev.get("date"):
-                try:
-                    event_date = datetime.strptime(ev["date"], "%Y-%m-%d").date()
-                except (ValueError, TypeError):
-                    pass
-
-            event = Event(
-                name=ev["name"],
-                slug=slug,
-                date=event_date,
-                wiki_path=ev.get("wiki_path", ""),
-            )
-            session.add(event)
-            session.flush()
-            added += 1
-
-            # Fetch fights (results for past, card for upcoming)
-            if ev.get("wiki_path"):
-                _sync_fights(session, event, ev["wiki_path"])
-        else:
-            # Existing event — check if we need to update fights
-            has_fights = session.query(Fight).filter_by(event_id=existing.id).count() > 0
-            has_results = session.query(Fight).filter(
-                Fight.event_id == existing.id,
-                Fight.winner.isnot(None),
-            ).count() > 0
-
-            # Update wiki_path if we didn't have it before
-            if ev.get("wiki_path") and not existing.wiki_path:
-                existing.wiki_path = ev["wiki_path"]
-
-            if not has_fights and ev.get("wiki_path"):
-                # No fights at all — fetch card or results
-                _sync_fights(session, existing, ev["wiki_path"])
-                updated += 1
-            elif has_fights and not has_results and existing.date and existing.date < date.today():
-                # Past event with card but no results — fetch results
-                if ev.get("wiki_path"):
-                    _sync_fights(session, existing, ev["wiki_path"], replace=True)
-                    updated += 1
-
-    session.commit()
-    log.info("Sync complete: %d added, %d updated, %d total events",
-             added, updated, len(all_events))
-
 
 def _sync_fights(session, event, wiki_path: str, replace: bool = False):
     """Fetch fights from Wikipedia and save to DB."""
@@ -477,17 +399,10 @@ if __name__ == "__main__":
     parser.add_argument("--card", help="Fetch card for upcoming event wiki path")
     parser.add_argument("--upcoming", action="store_true", help="Show upcoming events")
     parser.add_argument("--past", type=int, default=0, help="Show N past events")
-    parser.add_argument("--sync", action="store_true", help="First run: sync UFC 300+ to DB")
     parser.add_argument("--refresh", action="store_true", help="Quick refresh: upcoming + recent results")
     args = parser.parse_args()
 
-    if args.sync:
-        from models import SessionLocal
-        session = SessionLocal()
-        sync_events_to_db(session, since_event="UFC 300")
-        session.close()
-
-    elif args.refresh:
+    if args.refresh:
         from models import SessionLocal
         session = SessionLocal()
         refresh_upcoming(session)
