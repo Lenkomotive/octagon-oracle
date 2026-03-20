@@ -24,6 +24,9 @@ class Event(Base):
     slug = Column(String, unique=True, nullable=False)
     date = Column(Date)
     wiki_path = Column(String)
+    venue = Column(String)
+    city = Column(String)
+    country = Column(String)
 
     fights = relationship("Fight", back_populates="event")
     predictions = relationship("Prediction", back_populates="event")

@@ -88,6 +88,19 @@ def fetch_event_list() -> dict:
     }
 
 
+def _parse_location(raw: str) -> tuple[str, str]:
+    """Parse location string like 'Las Vegas,Nevada, U.S.' into (city, country)."""
+    raw = raw.strip()
+    if not raw or raw.startswith("—") or raw.replace(",", "").replace(".", "").isdigit():
+        return "", ""
+    parts = [p.strip() for p in raw.split(",")]
+    if len(parts) >= 2:
+        city = parts[0]
+        country = parts[-1].strip().rstrip(".")
+        return city, country
+    return raw, ""
+
+
 def _parse_upcoming_table(table) -> list[dict]:
     """Parse upcoming events table. Cols: Event, Date, Venue, Location, Ref."""
     events = []
@@ -98,9 +111,9 @@ def _parse_upcoming_table(table) -> list[dict]:
 
         name = cells[0].get_text(strip=True)
         date_str = cells[1].get_text(strip=True)
-        location = cells[3].get_text(strip=True)
+        venue = cells[2].get_text(strip=True)
+        city, country = _parse_location(cells[3].get_text(strip=True))
 
-        # Get wiki link
         link = cells[0].find("a")
         wiki_path = link.get("href", "") if link else ""
 
@@ -109,7 +122,9 @@ def _parse_upcoming_table(table) -> list[dict]:
         events.append({
             "name": name,
             "date": event_date.isoformat() if event_date else None,
-            "location": location,
+            "venue": venue,
+            "city": city,
+            "country": country,
             "wiki_path": wiki_path,
             "slug": _slugify(name),
         })
@@ -127,7 +142,17 @@ def _parse_past_table(table, limit: int = 200) -> list[dict]:
 
         name = cells[1].get_text(strip=True)
         date_str = cells[2].get_text(strip=True)
-        location = cells[4].get_text(strip=True)
+        venue = cells[3].get_text(strip=True)
+
+        # Col 4 can be location or attendance — check if it looks like a number
+        raw_loc = cells[4].get_text(strip=True)
+        city, country = _parse_location(raw_loc)
+
+        # If city is empty (was attendance), try to get location from the wiki page later
+        # For now, check if col 5 exists and looks like location
+        if not city and len(cells) > 5:
+            raw_loc2 = cells[5].get_text(strip=True)
+            city, country = _parse_location(raw_loc2)
 
         link = cells[1].find("a")
         wiki_path = link.get("href", "") if link else ""
@@ -137,7 +162,9 @@ def _parse_past_table(table, limit: int = 200) -> list[dict]:
         events.append({
             "name": name,
             "date": event_date.isoformat() if event_date else None,
-            "location": location,
+            "venue": venue,
+            "city": city,
+            "country": country,
             "wiki_path": wiki_path,
             "slug": _slugify(name),
         })
@@ -361,6 +388,9 @@ def refresh_upcoming(session):
                 slug=slug,
                 date=event_date,
                 wiki_path=ev.get("wiki_path", ""),
+                venue=ev.get("venue", ""),
+                city=ev.get("city", ""),
+                country=ev.get("country", ""),
             )
             session.add(event)
             session.flush()
