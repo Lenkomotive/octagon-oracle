@@ -7,23 +7,13 @@ interface RecentEvent {
   accuracy: number;
 }
 
-interface MethodAccuracy {
-  ko: number;
-  submission: number;
-  decision: number;
-}
-
 interface Analyst {
   slug: string;
   name: string;
-  channel: string;
   totalPredictions: number;
   correctPredictions: number;
   accuracy: number;
-  streak: number;
-  streakType: string;
   recentEvents: RecentEvent[];
-  methodAccuracy: MethodAccuracy;
 }
 
 function RankBadge({ rank }: { rank: number }) {
@@ -66,28 +56,8 @@ function AccuracyBar({ value }: { value: number }) {
   );
 }
 
-function StreakBadge({
-  streak,
-  type,
-}: {
-  streak: number;
-  type: string;
-}) {
-  const isWin = type === "W";
-  return (
-    <span
-      className={`inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold ${
-        isWin
-          ? "bg-green-50 text-green-600"
-          : "bg-red-50 text-red-500"
-      }`}
-    >
-      {streak}{type}
-    </span>
-  );
-}
-
 function MiniChart({ events }: { events: RecentEvent[] }) {
+  if (!events.length) return <span className="text-xs text-muted">—</span>;
   return (
     <div className="flex items-end gap-0.5">
       {events.map((e, i) => (
@@ -115,11 +85,8 @@ export function LeaderboardTable({ analysts }: { analysts: Analyst[] }) {
             <th className="px-5 py-4">Analyst</th>
             <th className="px-5 py-4">Record</th>
             <th className="px-5 py-4">Accuracy</th>
-            <th className="px-5 py-4">Streak</th>
+            <th className="px-5 py-4">Predictions</th>
             <th className="px-5 py-4">Recent</th>
-            <th className="px-5 py-4 hidden md:table-cell">KO%</th>
-            <th className="px-5 py-4 hidden md:table-cell">Sub%</th>
-            <th className="px-5 py-4 hidden md:table-cell">Dec%</th>
           </tr>
         </thead>
         <tbody>
@@ -138,7 +105,6 @@ export function LeaderboardTable({ analysts }: { analysts: Analyst[] }) {
                   <p className="font-semibold text-foreground">
                     {analyst.name}
                   </p>
-                  <p className="text-xs text-muted mt-0.5">{analyst.channel}</p>
                 </Link>
               </td>
               <td className="px-5 py-5 text-sm text-muted tabular-nums">
@@ -152,32 +118,14 @@ export function LeaderboardTable({ analysts }: { analysts: Analyst[] }) {
                   <AccuracyBar value={analyst.accuracy} />
                 </Link>
               </td>
-              <td className="px-5 py-5">
+              <td className="px-5 py-5 text-sm text-muted tabular-nums">
                 <Link href={`/analyst/${analyst.slug}`} className="block">
-                  <StreakBadge
-                    streak={analyst.streak}
-                    type={analyst.streakType}
-                  />
+                  {analyst.totalPredictions}
                 </Link>
               </td>
               <td className="px-5 py-5">
                 <Link href={`/analyst/${analyst.slug}`} className="block">
                   <MiniChart events={analyst.recentEvents} />
-                </Link>
-              </td>
-              <td className="px-5 py-5 hidden md:table-cell text-sm text-muted tabular-nums">
-                <Link href={`/analyst/${analyst.slug}`} className="block">
-                  {analyst.methodAccuracy.ko}%
-                </Link>
-              </td>
-              <td className="px-5 py-5 hidden md:table-cell text-sm text-muted tabular-nums">
-                <Link href={`/analyst/${analyst.slug}`} className="block">
-                  {analyst.methodAccuracy.submission}%
-                </Link>
-              </td>
-              <td className="px-5 py-5 hidden md:table-cell text-sm text-muted tabular-nums">
-                <Link href={`/analyst/${analyst.slug}`} className="block">
-                  {analyst.methodAccuracy.decision}%
                 </Link>
               </td>
             </tr>

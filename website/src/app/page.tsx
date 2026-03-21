@@ -1,9 +1,11 @@
-import data from "@/data/leaderboard.json";
+import { getLeaderboard } from "@/lib/db";
 import { LeaderboardTable } from "@/components/leaderboard-table";
-import { StatsCards } from "@/components/stats-cards";
 
-export default function Home() {
-  const sorted = [...data.analysts].sort((a, b) => b.accuracy - a.accuracy);
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const analysts = await getLeaderboard();
+  const sorted = [...analysts].sort((a, b) => b.accuracy - a.accuracy);
 
   return (
     <main className="min-h-screen bg-background">
@@ -24,7 +26,7 @@ export default function Home() {
             </div>
           </div>
           <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-600">
-            {data.event}
+            {analysts.length} analysts · {analysts.reduce((s, a) => s + a.totalPredictions, 0)} predictions
           </span>
         </div>
       </header>
