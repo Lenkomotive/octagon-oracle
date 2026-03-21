@@ -62,12 +62,12 @@ def _save_results(results: list[dict]):
         json.dump(results, f, indent=2)
 
 
-def _get_video_list(channel_url: str, since: str = "20240401") -> list[dict]:
-    """Fetch video IDs and titles from channel since a date (YYYYMMDD)."""
-    log.info("Fetching video list (since %s)...", since)
+def _get_video_list(channel_url: str, limit: int = 3000) -> list[dict]:
+    """Fetch video IDs and titles from channel."""
+    log.info("Fetching video list (limit=%d)...", limit)
     args = _yt_dlp_base_args() + [
         "--flat-playlist",
-        "--dateafter", since,
+        "--playlist-end", str(limit),
         "--print", "%(id)s|||%(title)s",
         channel_url,
     ]
@@ -225,10 +225,10 @@ TRANSCRIPT:
         return None
 
 
-def backfill(channel_name: str, channel_url: str, since: str = "20240401"):
+def backfill(channel_name: str, channel_url: str, limit: int = 3000):
     """Run backfill for a single channel."""
     log.info("=" * 60)
-    log.info("BACKFILL: %s (since %s)", channel_name, since)
+    log.info("BACKFILL: %s (limit=%d)", channel_name, limit)
     log.info("=" * 60)
 
     # Load existing results
@@ -236,7 +236,7 @@ def backfill(channel_name: str, channel_url: str, since: str = "20240401"):
     processed_ids = {r["video_id"] for r in results}
 
     # Get video list
-    videos = _get_video_list(channel_url, since)
+    videos = _get_video_list(channel_url, limit)
     log.info("Found %d total videos", len(videos))
 
     pred_videos = videos
@@ -247,6 +247,7 @@ def backfill(channel_name: str, channel_url: str, since: str = "20240401"):
     log.info("Loaded %d events from events.json", len(all_events))
 
     new_count = 0
+    consecutive_no_match = 0
 
     for i, video in enumerate(pred_videos):
         vid_id = video["id"]
@@ -269,8 +270,12 @@ def backfill(channel_name: str, channel_url: str, since: str = "20240401"):
         # Detect event
         event = _detect_event(title, all_events)
         if not event:
-            log.warning("  Could not detect event — skipping")
+            consecutive_no_match += 1
+            if consecutive_no_match >= 20:
+                log.info("20 consecutive videos with no event match — stopping (past our event range)")
+                break
             continue
+        consecutive_no_match = 0
         log.info("  Event: %s", event["name"])
 
         # Get fight card from event data
@@ -321,16 +326,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backfill predictions using Claude Code")
     parser.add_argument("--channel", default=None, help="Channel name (default: all)")
     parser.add_argument("--all", action="store_true", help="Process all channels")
-    parser.add_argument("--since", default="20240401", help="Process videos since date YYYYMMDD (default: 20240401 = UFC 300)")
+    parser.add_argument("--limit", type=int, default=3000, help="Max videos to fetch per channel")
     args = parser.parse_args()
 
     if args.all or args.channel is None:
         for name, url in CHANNELS.items():
-            backfill(name, url, args.since)
+            backfill(name, url, args.limit)
     else:
         channel_url = CHANNELS.get(args.channel)
         if not channel_url:
             print(f"Unknown channel: {args.channel}")
             print(f"Available: {', '.join(CHANNELS.keys())}")
             sys.exit(1)
-        backfill(args.channel, channel_url, args.since)
+        backfill(args.channel, channel_url, args.limit)
