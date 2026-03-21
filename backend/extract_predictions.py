@@ -83,21 +83,23 @@ def _extract_with_model(model: str, user_content: str) -> tuple[str, list[dict]]
 
 def _normalize_name(name: str) -> str:
     """Normalize fighter name for comparison."""
-    return name.lower().strip().replace(".", "").replace("-", " ")
+    import re
+    name = name.lower().strip()
+    name = re.sub(r'[^a-z\s]', '', name)  # remove all non-alpha
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name
 
 
 def _build_consensus(all_results: dict[str, list[dict]], fight_card: list[dict] = None) -> list[dict]:
     """Build consensus predictions from multiple model outputs.
 
     A pick is included if at least 2 models agree on the winner for a fight.
-    Uses fight card names when available for normalization.
+    Names are normalized to card names via LLM before comparing.
     """
-    # Build card name lookup
-    card_lookup = {}
+    # Normalize names via LLM (step 5a)
     if fight_card:
-        for f in fight_card:
-            card_lookup[_normalize_name(f["fighter1"])] = f["fighter1"]
-            card_lookup[_normalize_name(f["fighter2"])] = f["fighter2"]
+        from normalize_names import normalize_predictions
+        all_results = normalize_predictions(all_results, fight_card)
 
     # Collect all picks per fight (keyed by sorted fighter pair)
     fight_picks = {}  # (fighter_a, fighter_b) -> {model: picked_fighter}
@@ -106,14 +108,6 @@ def _build_consensus(all_results: dict[str, list[dict]], fight_card: list[dict] 
         for p in preds:
             picked = p["fighter_picked"]
             against = p["fighter_against"]
-
-            # Normalize to card names if possible
-            picked_norm = _normalize_name(picked)
-            against_norm = _normalize_name(against)
-
-            if card_lookup:
-                picked = card_lookup.get(picked_norm, picked)
-                against = card_lookup.get(against_norm, against)
 
             # Create a canonical fight key (sorted)
             fight_key = tuple(sorted([_normalize_name(picked), _normalize_name(against)]))

@@ -95,19 +95,38 @@
                      │  - fight card from     │
                      │    fights table        │
                      │                        │
-                     │  Output (consensus):   │
-                     │  - fighter_picked      │
-                     │  - fighter_against     │
-                     │  - method              │
-                     │  - confidence (based   │
-                     │    on model agreement) │
-                     │  - models_agreed (2-4) │
+                     │  Output: raw picks     │
+                     │  per model             │
+                     └───────────┬────────────┘
+                                 │
+                                 ▼
+                     ┌────────────────────────┐
+                     │  5a. NORMALIZE NAMES   │
+                     │                        │
+                     │  LLM maps all fighter  │
+                     │  names from all models │
+                     │  to official card names│
+                     │  in one shot           │
+                     │                        │
+                     │  "Chanel Dyer"         │
+                     │    → "Shanelle Dyer"   │
+                     │  "Shamrock"            │
+                     │    → "Shaqueme Rock"   │
+                     └───────────┬────────────┘
+                                 │
+                                 ▼
+                     ┌────────────────────────┐
+                     │  5b. CONSENSUS         │
+                     │                        │
+                     │  Compare normalized    │
+                     │  picks across models   │
                      │                        │
                      │  Pick included only if │
                      │  2+ models agree       │
                      │                        │
-                     │  Validate all names    │
-                     │  against card          │
+                     │  Confidence:           │
+                     │  3/3 = high            │
+                     │  2/3 = medium          │
                      │                        │
                      │  Save video with       │
                      │  transcript + picks    │
