@@ -1,64 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import data from "@/data/leaderboard.json";
+import { query } from "@/lib/db";
 
-interface Prediction {
-  fighter: string;
-  opponent: string;
-  method: string;
-  confidence: string;
-  result: string;
-}
-
-interface RecentEvent {
-  event: string;
-  correct: number;
-  total: number;
-  accuracy: number;
-  predictions: Prediction[];
-}
-
-export function generateStaticParams() {
-  return data.analysts.map((a) => ({ slug: a.slug }));
-}
-
-export function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
-  return params.then(({ slug }) => {
-    const analyst = data.analysts.find((a) => a.slug === slug);
-    return {
-      title: analyst
-        ? `${analyst.name} — Octagon Oracle`
-        : "Analyst Not Found",
-    };
-  });
-}
-
-function ConfidenceDot({ level }: { level: string }) {
-  const colors: Record<string, string> = {
-    high: "bg-green-500",
-    medium: "bg-yellow-400",
-    low: "bg-red-400",
-  };
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className={`inline-block h-1.5 w-1.5 rounded-full ${colors[level] ?? "bg-muted"}`} />
-      <span className="text-xs text-muted capitalize">{level}</span>
-    </span>
-  );
-}
-
-function ResultBadge({ result }: { result: string }) {
-  const isCorrect = result === "correct";
-  return (
-    <span
-      className={`inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold ${
-        isCorrect ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"
-      }`}
-    >
-      {isCorrect ? "W" : "L"}
-    </span>
-  );
-}
+export const dynamic = "force-dynamic";
 
 export default async function AnalystPage({
   params,
@@ -66,9 +10,55 @@ export default async function AnalystPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const analyst = data.analysts.find((a) => a.slug === slug);
 
-  if (!analyst) notFound();
+  // Find channel
+  const channels = await query(
+    `SELECT * FROM channels WHERE LOWER(REPLACE(name, ' ', '-')) = $1`,
+    [slug]
+  );
+  if (!channels.length) notFound();
+  const channel = channels[0];
+
+  // Get stats
+  const stats = await query(`
+    SELECT
+      COUNT(p.id) as total,
+      COUNT(s.id) FILTER (WHERE s.correct = true) as correct
+    FROM predictions p
+    LEFT JOIN scores s ON s.prediction_id = p.id
+    WHERE p.channel_id = $1
+  `, [channel.id]);
+
+  const total = Number(stats[0].total);
+  const correct = Number(stats[0].correct);
+  const accuracy = total > 0 ? Math.round((correct / total) * 1000) / 10 : 0;
+
+  // Get predictions grouped by event
+  const predictions = await query(`
+    SELECT
+      e.name as event,
+      e.date,
+      p.fighter_picked,
+      p.fighter_against,
+      p.method,
+      p.confidence,
+      s.correct as result
+    FROM predictions p
+    JOIN events e ON p.event_id = e.id
+    LEFT JOIN scores s ON s.prediction_id = p.id
+    WHERE p.channel_id = $1
+    ORDER BY e.date DESC, p.id
+  `, [channel.id]);
+
+  // Group by event
+  const eventMap = new Map<string, { event: string; date: string; predictions: typeof predictions }>();
+  for (const p of predictions) {
+    if (!eventMap.has(p.event)) {
+      eventMap.set(p.event, { event: p.event, date: p.date, predictions: [] });
+    }
+    eventMap.get(p.event)!.predictions.push(p);
+  }
+  const events = Array.from(eventMap.values());
 
   return (
     <main className="min-h-screen bg-background">
@@ -83,17 +73,16 @@ export default async function AnalystPage({
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-xl font-bold tracking-tight text-foreground">
-                {analyst.name}
+                {channel.name}
               </h1>
-              <p className="text-sm text-muted">{analyst.channel}</p>
+              <p className="text-sm text-muted">{events.length} events covered</p>
             </div>
             <div className="text-right">
               <p className="text-4xl font-black text-red-600 tracking-tight">
-                {analyst.accuracy}%
+                {accuracy}%
               </p>
               <p className="text-xs text-muted mt-0.5">
-                {analyst.correctPredictions}-
-                {analyst.totalPredictions - analyst.correctPredictions} overall
+                {correct}-{total - correct} · {total} predictions
               </p>
             </div>
           </div>
@@ -101,82 +90,75 @@ export default async function AnalystPage({
       </header>
 
       <div className="mx-auto max-w-5xl px-6 py-10 space-y-8">
-        {/* Method accuracy cards */}
-        <div className="grid grid-cols-3 gap-3">
-          {[
-            { label: "KO/TKO", value: analyst.methodAccuracy.ko },
-            { label: "Submission", value: analyst.methodAccuracy.submission },
-            { label: "Decision", value: analyst.methodAccuracy.decision },
-          ].map((m) => (
+        {events.map((event) => {
+          const eventCorrect = event.predictions.filter((p: { result: boolean | null }) => p.result === true).length;
+          const eventScored = event.predictions.filter((p: { result: boolean | null }) => p.result !== null).length;
+
+          return (
             <div
-              key={m.label}
-              className="rounded-2xl bg-card p-5 shadow-sm text-center"
+              key={event.event}
+              className="rounded-2xl bg-card shadow-sm overflow-hidden"
             >
-              <p className="text-xs font-medium text-muted uppercase tracking-wider">{m.label}</p>
-              <p className="mt-2 text-2xl font-bold text-foreground tracking-tight">
-                {m.value}%
-              </p>
-            </div>
-          ))}
-        </div>
-
-        {/* Recent events with predictions */}
-        {analyst.recentEvents.map((event: RecentEvent) => (
-          <div
-            key={event.event}
-            className="rounded-2xl bg-card shadow-sm overflow-hidden"
-          >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-card-border">
-              <h2 className="font-semibold text-foreground">{event.event}</h2>
-              <div className="flex items-center gap-3">
-                <span className="text-sm text-muted tabular-nums">
-                  {event.correct}/{event.total}
-                </span>
-                <span className="rounded-lg bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600">
-                  {event.accuracy}%
-                </span>
+              <div className="flex items-center justify-between px-5 py-4 border-b border-card-border">
+                <h2 className="font-semibold text-foreground">{event.event}</h2>
+                <div className="flex items-center gap-3">
+                  {eventScored > 0 ? (
+                    <>
+                      <span className="text-sm text-muted tabular-nums">
+                        {eventCorrect}/{eventScored}
+                      </span>
+                      <span className="rounded-lg bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-600">
+                        {Math.round((eventCorrect / eventScored) * 100)}%
+                      </span>
+                    </>
+                  ) : (
+                    <span className="rounded-lg bg-gray-100 px-2.5 py-1 text-xs font-medium text-muted">
+                      {event.predictions.length} picks · not scored
+                    </span>
+                  )}
+                </div>
               </div>
-            </div>
 
-            {event.predictions.length > 0 ? (
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-card-border text-[11px] uppercase tracking-wider text-muted">
                     <th className="px-5 py-3">Pick</th>
-                    <th className="px-5 py-3">Opponent</th>
+                    <th className="px-5 py-3">Over</th>
                     <th className="px-5 py-3">Method</th>
                     <th className="px-5 py-3 text-right">Result</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {event.predictions.map((p: Prediction, i: number) => (
+                  {event.predictions.map((p: { fighter_picked: string; fighter_against: string; method: string | null; result: boolean | null }, i: number) => (
                     <tr
                       key={i}
                       className="border-b border-card-border last:border-0 transition-colors hover:bg-gray-50"
                     >
                       <td className="px-5 py-3.5 text-sm font-medium text-foreground">
-                        {p.fighter}
+                        {p.fighter_picked}
                       </td>
                       <td className="px-5 py-3.5 text-sm text-muted">
-                        {p.opponent}
+                        {p.fighter_against}
                       </td>
                       <td className="px-5 py-3.5 text-sm text-muted">
-                        {p.method}
+                        {p.method || "—"}
                       </td>
                       <td className="px-5 py-3.5 text-right">
-                        <ResultBadge result={p.result} />
+                        {p.result === true ? (
+                          <span className="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold bg-green-50 text-green-600">W</span>
+                        ) : p.result === false ? (
+                          <span className="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-semibold bg-red-50 text-red-500">L</span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-lg px-2.5 py-1 text-xs font-medium bg-gray-100 text-muted">—</span>
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            ) : (
-              <div className="px-5 py-8 text-center text-sm text-muted">
-                Detailed predictions not yet available for this event.
-              </div>
-            )}
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </div>
     </main>
   );
