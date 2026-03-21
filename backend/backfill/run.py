@@ -20,7 +20,6 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from extract_transcript import _yt_dlp_base_args, _fetch_youtube_captions
-from fetch_events import fetch_event_list, fetch_event_results, fetch_event_card
 
 logging.basicConfig(
     level=logging.INFO,
@@ -119,19 +118,11 @@ def _detect_event(title: str, events: list[dict]) -> dict | None:
     return None
 
 
-def _get_fight_card(event: dict) -> list[dict] | None:
-    """Get fight card/results from Wikipedia."""
-    wiki_path = event.get("wiki_path")
-    if not wiki_path:
-        return None
-
-    data = fetch_event_results(wiki_path)
-    if not data or not data.get("fights"):
-        data = fetch_event_card(wiki_path)
-
-    if data and data.get("fights"):
-        return data["fights"]
-    return None
+def _load_events() -> list[dict]:
+    """Load events from local events.json (exported from DB)."""
+    events_file = os.path.join(BACKFILL_DIR, "events.json")
+    with open(events_file) as f:
+        return json.load(f)
 
 
 def _get_captions(video_id: str) -> str | None:
@@ -223,14 +214,9 @@ def backfill(channel_name: str, channel_url: str, limit: int = 500):
     pred_videos = [v for v in videos if _is_prediction_title(v["title"])]
     log.info("Prediction-like titles: %d", len(pred_videos))
 
-    # Get event list from Wikipedia (once)
-    log.info("Fetching event list from Wikipedia...")
-    event_data = fetch_event_list()
-    all_events = event_data["upcoming"] + event_data["past"]
-    log.info("Loaded %d events", len(all_events))
-
-    # Fight card cache
-    card_cache = {}  # wiki_path -> fights
+    # Load events from local JSON (exported from DB)
+    all_events = _load_events()
+    log.info("Loaded %d events from events.json", len(all_events))
 
     new_count = 0
 
@@ -255,13 +241,8 @@ def backfill(channel_name: str, channel_url: str, limit: int = 500):
             continue
         log.info("  Event: %s", event["name"])
 
-        # Get fight card (cached)
-        wiki_path = event.get("wiki_path", "")
-        if wiki_path in card_cache:
-            fights = card_cache[wiki_path]
-        else:
-            fights = _get_fight_card(event)
-            card_cache[wiki_path] = fights
+        # Get fight card from event data
+        fights = event.get("fights")
         if not fights:
             log.warning("  No fight card found — skipping")
             continue
