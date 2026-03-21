@@ -53,24 +53,29 @@ def _get_video_info(video_url: str) -> dict:
 
 
 def _fetch_youtube_captions(video_url: str, video_id: str) -> str | None:
-    """Fetch YouTube auto-captions via yt-dlp. Returns caption text or None."""
+    """Fetch YouTube auto-captions via yt-dlp. Tries English first, then any language."""
     log.info("Fetching YouTube auto-captions for %s...", video_id)
     t0 = time.time()
     out_template = f"/tmp/oo_{video_id}"
-    args = _yt_dlp_base_args() + [
-        "--write-auto-sub", "--sub-lang", "en",
-        "--sub-format", "json3",
-        "--skip-download",
-        "-o", out_template,
-        video_url,
-    ]
 
-    result = subprocess.run(args, capture_output=True, text=True)
-    if result.returncode != 0:
-        log.debug("yt-dlp captions stderr: %s", result.stderr[:300])
+    # Try English first, then any language
+    for lang in ["en", "de", "es", "fr", "pt"]:
+        args = _yt_dlp_base_args() + [
+            "--write-auto-sub", "--sub-lang", lang,
+            "--sub-format", "json3",
+            "--skip-download",
+            "-o", out_template,
+            video_url,
+        ]
+        subprocess.run(args, capture_output=True, text=True)
+        sub_path = f"{out_template}.{lang}.json3"
+        if os.path.isfile(sub_path):
+            log.info("Found %s captions", lang)
+            break
+    else:
+        sub_path = None
 
-    sub_path = f"{out_template}.en.json3"
-    if not os.path.isfile(sub_path):
+    if not sub_path or not os.path.isfile(sub_path):
         log.warning("No auto-captions available for %s", video_id)
         return None
 
