@@ -223,10 +223,14 @@ def backfill(channel_name: str, channel_url: str, limit: int = 500):
     pred_videos = [v for v in videos if _is_prediction_title(v["title"])]
     log.info("Prediction-like titles: %d", len(pred_videos))
 
-    # Get event list from Wikipedia
+    # Get event list from Wikipedia (once)
     log.info("Fetching event list from Wikipedia...")
     event_data = fetch_event_list()
     all_events = event_data["upcoming"] + event_data["past"]
+    log.info("Loaded %d events", len(all_events))
+
+    # Fight card cache
+    card_cache = {}  # wiki_path -> fights
 
     new_count = 0
 
@@ -251,8 +255,13 @@ def backfill(channel_name: str, channel_url: str, limit: int = 500):
             continue
         log.info("  Event: %s", event["name"])
 
-        # Get fight card
-        fights = _get_fight_card(event)
+        # Get fight card (cached)
+        wiki_path = event.get("wiki_path", "")
+        if wiki_path in card_cache:
+            fights = card_cache[wiki_path]
+        else:
+            fights = _get_fight_card(event)
+            card_cache[wiki_path] = fights
         if not fights:
             log.warning("  No fight card found — skipping")
             continue
