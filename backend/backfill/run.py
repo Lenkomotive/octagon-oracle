@@ -79,14 +79,6 @@ def _get_video_list(channel_url: str, limit: int = 500) -> list[dict]:
     return videos
 
 
-def _is_prediction_title(title: str) -> bool:
-    """Quick title check — rough filter before processing."""
-    t = title.lower()
-    return any(kw in t for kw in [
-        "prediction", "picks", "betting tips", "full card breakdown",
-        "betting breakdown", "bedtime bicks", "best bets",
-    ])
-
 
 def _detect_event(title: str, events: list[dict]) -> dict | None:
     """Match video title to a UFC event."""
@@ -210,9 +202,8 @@ def backfill(channel_name: str, channel_url: str, limit: int = 500):
     videos = _get_video_list(channel_url, limit)
     log.info("Found %d total videos", len(videos))
 
-    # Filter prediction videos
-    pred_videos = [v for v in videos if _is_prediction_title(v["title"])]
-    log.info("Prediction-like titles: %d", len(pred_videos))
+    pred_videos = videos
+    log.info("Videos to process: %d", len(pred_videos))
 
     # Load events from local JSON (exported from DB)
     all_events = _load_events()
