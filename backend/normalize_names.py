@@ -59,7 +59,7 @@ Official card names:
 Return ONLY a JSON object mapping each input name to its matching card name.
 Example: {{"Chanel Dyer": "Shanelle Dyer", "Shamrock": "Shaqueme Rock"}}
 If a name already matches exactly, include it too.
-Every input name must appear in the output."""
+IMPORTANT: If a name does NOT match anyone on the card, map it to itself unchanged. Do NOT force a match."""
 
     response = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
