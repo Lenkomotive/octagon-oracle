@@ -47,18 +47,25 @@ CHANNELS = {
 }
 
 BACKFILL_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_FILE = os.path.join(BACKFILL_DIR, "results.json")
+RESULTS_DIR = os.path.join(BACKFILL_DIR, "results")
 
 
-def _load_results() -> list[dict]:
-    if os.path.isfile(OUTPUT_FILE):
-        with open(OUTPUT_FILE) as f:
+def _output_file(channel_name: str) -> str:
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    slug = channel_name.replace(" ", "_").replace("/", "_")
+    return os.path.join(RESULTS_DIR, f"{slug}.json")
+
+
+def _load_results(channel_name: str) -> list[dict]:
+    path = _output_file(channel_name)
+    if os.path.isfile(path):
+        with open(path) as f:
             return json.load(f)
     return []
 
 
-def _save_results(results: list[dict]):
-    with open(OUTPUT_FILE, "w") as f:
+def _save_results(channel_name: str, results: list[dict]):
+    with open(_output_file(channel_name), "w") as f:
         json.dump(results, f, indent=2)
 
 
@@ -232,7 +239,7 @@ def backfill(channel_name: str, channel_url: str, limit: int = 3000):
     log.info("=" * 60)
 
     # Load existing results
-    results = _load_results()
+    results = _load_results(channel_name)
     processed_ids = {r["video_id"] for r in results}
 
     # Get video list
@@ -302,7 +309,7 @@ def backfill(channel_name: str, channel_url: str, limit: int = 3000):
 
         if result and result.get("predictions"):
             results.append(result)
-            _save_results(results)
+            _save_results(channel_name, results)
             processed_ids.add(vid_id)
             n = len(result["predictions"])
             log.info("  ✓ Saved %d predictions", n)
@@ -318,7 +325,7 @@ def backfill(channel_name: str, channel_url: str, limit: int = 3000):
     log.info("")
     log.info("=" * 60)
     log.info("BACKFILL COMPLETE: %d new videos processed", new_count)
-    log.info("Total in %s: %d", OUTPUT_FILE, len(results))
+    log.info("Total in %s: %d", _output_file(channel_name), len(results))
     log.info("=" * 60)
 
 
