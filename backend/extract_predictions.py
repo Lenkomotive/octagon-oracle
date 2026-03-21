@@ -21,7 +21,6 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 MODELS = [
     "deepseek/deepseek-v3.2",
     "google/gemini-2.5-flash-lite",
-    "meta-llama/llama-3.3-70b-instruct",
 ]
 
 SYSTEM_PROMPT = """You are a UFC prediction extractor. Given a transcript from a YouTube video where someone discusses upcoming UFC fights and makes predictions, extract all fight predictions.

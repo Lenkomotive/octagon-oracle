@@ -67,11 +67,10 @@
                      ┌────────────────────────┐
                      │  4. CLASSIFY VIDEO     │
                      │                        │
-                     │  3 models in parallel: │
+                     │  2 models in parallel: │
                      │  - DeepSeek V3.2       │
                      │  - Gemini 2.5 Flash    │
                      │    Lite                │
-                     │  - Llama 3.3 70B       │
                      │                        │
                      │  Majority vote:        │
                      │  "Is this a prediction │
@@ -153,10 +152,10 @@
 1. Only process videos during FIGHT WEEK (upcoming event exists)
 2. Only check the LATEST video per channel (not last 10)
 3. Always transcribe, then LLMs classify from transcript
-4. No keyword filtering — LLM majority vote decides (2/3 or 3/3)
+4. No keyword filtering — both LLMs must agree
 5. Only save transcript to DB if it's a prediction video
-6. Extraction uses 3 models in parallel, consensus (2+ agree)
-7. Confidence = high (3/3), medium (2/3)
+6. Extraction uses 2 models in parallel, both must agree
+7. Confidence = high (2/2 agree on method too), medium (2/2 winner only)
 8. Scoring piggybacks on step 0 — when results are fetched for a
    completed event, all unscored predictions are scored immediately
 
@@ -166,8 +165,8 @@
 | Step        | Models                                                    |
 |-------------|-----------------------------------------------------------|
 | Transcript  | whisper-large-v3 (Groq) → YouTube captions fallback       |
-| Classify    | DeepSeek V3.2, Gemini 2.5 Flash Lite, Llama 3.3 70B       |
-| Extraction  | DeepSeek V3.2, Gemini 2.5 Flash Lite, Llama 3.3 70B       |
+| Classify    | DeepSeek V3.2, Gemini 2.5 Flash Lite                      |
+| Extraction  | DeepSeek V3.2, Gemini 2.5 Flash Lite                      |
 
 
 ## Database Tables
