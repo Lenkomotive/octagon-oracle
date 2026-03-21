@@ -155,12 +155,13 @@ TRANSCRIPT:
         f.write(prompt)
 
     try:
-        result = subprocess.run(
-            ["claude", "-p", "--output-format", "json"],
-            stdin=open(prompt_file),
-            capture_output=True, text=True,
-            timeout=120,
-        )
+        with open(prompt_file) as pf:
+            result = subprocess.run(
+                ["claude", "-p", "--output-format", "json"],
+                stdin=pf,
+                capture_output=True, text=True,
+                timeout=180,
+            )
 
         os.remove(prompt_file)
 
@@ -169,12 +170,27 @@ TRANSCRIPT:
             return None
 
         raw = result.stdout.strip()
-        # Find JSON in response
+
+        # --output-format json wraps response in metadata
+        try:
+            wrapper = json.loads(raw)
+            if "result" in wrapper:
+                raw = wrapper["result"]
+        except json.JSONDecodeError:
+            pass
+
+        # Strip markdown fences
+        if "```" in raw:
+            raw = raw.split("```json")[-1] if "```json" in raw else raw.split("```")[-2]
+            raw = raw.replace("```", "").strip()
+
+        # Find JSON object
         start = raw.find("{")
         end = raw.rfind("}") + 1
         if start >= 0 and end > start:
             return json.loads(raw[start:end])
 
+        log.error("  No JSON found in Claude response")
         return None
 
     except subprocess.TimeoutExpired:
