@@ -44,6 +44,8 @@ CHANNELS = {
     "The Weasle": "https://www.youtube.com/@theweaslemma/videos",
     "Bet Slam With Sam": "https://www.youtube.com/@BetSlamWithSam/videos",
     "Lorenzo Predicts": "https://www.youtube.com/@LorenzoPredicts/videos",
+    "Kunath": "https://www.youtube.com/@KunathMMA/videos",
+    "The MMA Yuda": "https://www.youtube.com/@themmayuda/videos",
 }
 
 BACKFILL_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -127,22 +129,28 @@ def _load_events() -> list[dict]:
 
 def _classify_title(title: str) -> bool:
     """Quick Claude call on title only — is it a prediction or recap?"""
-    result = subprocess.run(
-        ["claude", "-p", "Answer with ONLY the word 'prediction' or 'not'. "
-         f"Is this video title a fight prediction video (picks winners before event) "
-         f"or something else (recap, reaction, news)?\n\nTitle: \"{title}\""],
-        capture_output=True, text=True, timeout=30,
-    )
-    answer = result.stdout.strip().lower()
-    # Handle JSON wrapper from --output-format
-    if "{" in answer:
-        try:
-            answer = json.loads(answer).get("result", answer).lower()
-        except json.JSONDecodeError:
-            pass
-    is_pred = "prediction" in answer and "not" not in answer
-    log.info("  Classify: \"%s\" → %s", title[:50], "PREDICTION" if is_pred else "SKIP")
-    return is_pred
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "Answer with ONLY the word 'prediction' or 'not'. "
+             f"Is this video title a fight prediction video (picks winners before event) "
+             f"or something else (recap, reaction, news)?\n\nTitle: \"{title}\""],
+            capture_output=True, text=True, timeout=60,
+        )
+        answer = result.stdout.strip().lower()
+        if "{" in answer:
+            try:
+                answer = json.loads(answer).get("result", answer).lower()
+            except json.JSONDecodeError:
+                pass
+        is_pred = "prediction" in answer and "not" not in answer
+        log.info("  Classify: \"%s\" → %s", title[:50], "PREDICTION" if is_pred else "SKIP")
+        return is_pred
+    except subprocess.TimeoutExpired:
+        log.warning("  Classify timeout — skipping")
+        return False
+    except Exception as e:
+        log.warning("  Classify failed: %s — skipping", e)
+        return False
 
 
 def _get_captions(video_id: str) -> str | None:
@@ -277,9 +285,10 @@ def backfill(channel_name: str, channel_url: str, limit: int = 3000):
         # Detect event
         event = _detect_event(title, all_events)
         if not event:
+            log.info("  No event match — skipping")
             consecutive_no_match += 1
             if consecutive_no_match >= 20:
-                log.info("20 consecutive videos with no event match — stopping (past our event range)")
+                log.info("20 consecutive no-match — stopping (past our event range)")
                 break
             continue
         consecutive_no_match = 0
