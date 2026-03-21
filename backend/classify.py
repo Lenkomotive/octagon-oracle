@@ -18,9 +18,9 @@ log = logging.getLogger("classify")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 MODELS = [
-    "google/gemini-2.5-flash",
-    "deepseek/deepseek-v3.2-20251201",
-    "openai/gpt-oss-120b",
+    "deepseek/deepseek-v3.2",
+    "google/gemini-2.5-flash-lite",
+    "meta-llama/llama-3.3-70b-instruct",
 ]
 
 SYSTEM_PROMPT = "Answer only 'yes' or 'no'. A prediction video is one where someone picks winners for upcoming UFC fights. Look for phrases like 'I'm going with', 'my pick is', 'prediction', 'I think X beats Y', 'breakdown', etc."

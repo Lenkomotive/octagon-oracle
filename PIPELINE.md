@@ -68,9 +68,10 @@
                      │  4. CLASSIFY VIDEO     │
                      │                        │
                      │  3 models in parallel: │
-                     │  - Gemini 2.5 Flash    │
                      │  - DeepSeek V3.2       │
-                     │  - GPT-OSS 120B        │
+                     │  - Gemini 2.5 Flash    │
+                     │    Lite                │
+                     │  - Llama 3.3 70B       │
                      │                        │
                      │  Majority vote:        │
                      │  "Is this a prediction │
@@ -146,8 +147,8 @@
 | Step        | Models                                                    |
 |-------------|-----------------------------------------------------------|
 | Transcript  | whisper-large-v3 (Groq) → YouTube captions fallback       |
-| Classify    | Gemini 2.5 Flash, DeepSeek V3.2, GPT-OSS 120B             |
-| Extraction  | Gemini 2.5 Flash, DeepSeek V3.2, GPT-OSS 120B             |
+| Classify    | DeepSeek V3.2, Gemini 2.5 Flash Lite, Llama 3.3 70B       |
+| Extraction  | DeepSeek V3.2, Gemini 2.5 Flash Lite, Llama 3.3 70B       |
 
 
 ## Database Tables
