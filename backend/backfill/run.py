@@ -62,15 +62,16 @@ def _save_results(results: list[dict]):
         json.dump(results, f, indent=2)
 
 
-def _get_video_list(channel_url: str, limit: int = 500) -> list[dict]:
-    """Fetch video IDs and titles from channel."""
-    log.info("Fetching video list (limit=%d)...", limit)
+def _get_video_list(channel_url: str, since: str = "20240401") -> list[dict]:
+    """Fetch video IDs and titles from channel since a date (YYYYMMDD)."""
+    log.info("Fetching video list (since %s)...", since)
     args = _yt_dlp_base_args() + [
-        "--flat-playlist", "--playlist-end", str(limit),
+        "--flat-playlist",
+        "--dateafter", since,
         "--print", "%(id)s|||%(title)s",
         channel_url,
     ]
-    result = subprocess.run(args, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(args, capture_output=True, text=True, timeout=120)
     videos = []
     for line in result.stdout.strip().split("\n"):
         parts = line.split("|||", 1)
@@ -204,10 +205,10 @@ TRANSCRIPT:
         return None
 
 
-def backfill(channel_name: str, channel_url: str, limit: int = 500):
+def backfill(channel_name: str, channel_url: str, since: str = "20240401"):
     """Run backfill for a single channel."""
     log.info("=" * 60)
-    log.info("BACKFILL: %s", channel_name)
+    log.info("BACKFILL: %s (since %s)", channel_name, since)
     log.info("=" * 60)
 
     # Load existing results
@@ -215,7 +216,7 @@ def backfill(channel_name: str, channel_url: str, limit: int = 500):
     processed_ids = {r["video_id"] for r in results}
 
     # Get video list
-    videos = _get_video_list(channel_url, limit)
+    videos = _get_video_list(channel_url, since)
     log.info("Found %d total videos", len(videos))
 
     pred_videos = videos
@@ -296,16 +297,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backfill predictions using Claude Code")
     parser.add_argument("--channel", default=None, help="Channel name (default: all)")
     parser.add_argument("--all", action="store_true", help="Process all channels")
-    parser.add_argument("--limit", type=int, default=500, help="Max videos to scan per channel")
+    parser.add_argument("--since", default="20240401", help="Process videos since date YYYYMMDD (default: 20240401 = UFC 300)")
     args = parser.parse_args()
 
     if args.all or args.channel is None:
         for name, url in CHANNELS.items():
-            backfill(name, url, args.limit)
+            backfill(name, url, args.since)
     else:
         channel_url = CHANNELS.get(args.channel)
         if not channel_url:
             print(f"Unknown channel: {args.channel}")
             print(f"Available: {', '.join(CHANNELS.keys())}")
             sys.exit(1)
-        backfill(args.channel, channel_url, args.limit)
+        backfill(args.channel, channel_url, args.since)
