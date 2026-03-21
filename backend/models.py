@@ -81,6 +81,7 @@ class Prediction(Base):
 
     id = Column(Integer, primary_key=True)
     video_id = Column(Integer, ForeignKey("videos.id"), nullable=False)
+    channel_id = Column(Integer, ForeignKey("channels.id"))
     event_id = Column(Integer, ForeignKey("events.id"))
     fighter_picked = Column(String, nullable=False)
     fighter_against = Column(String, nullable=False)
