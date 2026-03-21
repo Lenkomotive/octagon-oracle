@@ -20,6 +20,7 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 MODELS = [
     "deepseek/deepseek-v3.2",
     "google/gemini-2.5-flash-lite",
+    "openai/gpt-4o-mini",
 ]
 
 SYSTEM_PROMPT = "Answer only 'yes' or 'no'. A prediction video is one where someone picks winners for upcoming UFC fights. Look for phrases like 'I'm going with', 'my pick is', 'prediction', 'I think X beats Y', 'breakdown', etc."
