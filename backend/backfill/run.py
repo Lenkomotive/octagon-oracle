@@ -118,6 +118,26 @@ def _load_events() -> list[dict]:
         return json.load(f)
 
 
+def _classify_title(title: str) -> bool:
+    """Quick Claude call on title only — is it a prediction or recap?"""
+    result = subprocess.run(
+        ["claude", "-p", "Answer with ONLY the word 'prediction' or 'not'. "
+         f"Is this video title a fight prediction video (picks winners before event) "
+         f"or something else (recap, reaction, news)?\n\nTitle: \"{title}\""],
+        capture_output=True, text=True, timeout=30,
+    )
+    answer = result.stdout.strip().lower()
+    # Handle JSON wrapper from --output-format
+    if "{" in answer:
+        try:
+            answer = json.loads(answer).get("result", answer).lower()
+        except json.JSONDecodeError:
+            pass
+    is_pred = "prediction" in answer and "not" not in answer
+    log.info("  Classify: \"%s\" → %s", title[:50], "PREDICTION" if is_pred else "SKIP")
+    return is_pred
+
+
 def _get_captions(video_id: str) -> str | None:
     """Get YouTube auto-captions for a video."""
     video_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -241,6 +261,10 @@ def backfill(channel_name: str, channel_url: str, since: str = "20240401"):
         log.info("=" * 50)
         log.info("[%d/%d] %s", i + 1, len(pred_videos), title[:70])
         log.info("  ID: %s", vid_id)
+
+        # Classify title first (fast, no transcript needed)
+        if not _classify_title(title):
+            continue
 
         # Detect event
         event = _detect_event(title, all_events)
